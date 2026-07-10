@@ -272,6 +272,13 @@ private fun ProviderSetting.apiModelCacheKey(): String {
             apiKey.hashCode().toString(),
         )
 
+        is ProviderSetting.Antigravity -> listOf(
+            "antigravity",
+            id.toString(),
+            baseUrl,
+            apiKey.hashCode().toString(),
+        )
+
         is ProviderSetting.Google -> listOf(
             "google",
             id.toString(),
@@ -315,6 +322,7 @@ private fun ProviderSetting.canFetchApiModels(): Boolean {
         }
         is ProviderSetting.Claude -> apiKey.isNotBlank()
         is ProviderSetting.ComfyUI -> workflowJson.isNotBlank()
+        is ProviderSetting.Antigravity -> true
         is ProviderSetting.LiteRtLocal -> false // on-device: no remote model list
     }
 }
@@ -627,10 +635,15 @@ private fun SettingProviderConfigPage(
                 }
             }
 
-            if (internalProvider is ProviderSetting.OpenAI) {
+            if (internalProvider is ProviderSetting.OpenAI || internalProvider is ProviderSetting.Antigravity) {
+                val balanceOption = when (val p = internalProvider) {
+                    is ProviderSetting.OpenAI -> p.balanceOption
+                    is ProviderSetting.Antigravity -> p.balanceOption
+                    else -> error("unreachable")
+                }
                 SettingProviderBalanceOption(
                     provider = internalProvider,
-                    balanceOption = internalProvider.balanceOption,
+                    balanceOption = balanceOption,
                     onEdit = { 
                         val updated = internalProvider.copyProvider(balanceOption = it)
                         internalProvider = updated
@@ -1600,6 +1613,7 @@ containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceCon
                                 is ProviderSetting.Google -> parentProvider.apiKey.isNotBlank()
                                 is ProviderSetting.Claude -> parentProvider.apiKey.isNotBlank()
                                 is ProviderSetting.ComfyUI -> parentProvider.workflowJson.isNotBlank()
+                                is ProviderSetting.Antigravity -> true
                                 is ProviderSetting.LiteRtLocal -> true
                             }
                             
@@ -1947,6 +1961,7 @@ containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceCon
                                 is ProviderSetting.Google -> parentProvider.apiKey.isNotBlank()
                                 is ProviderSetting.Claude -> parentProvider.apiKey.isNotBlank()
                                 is ProviderSetting.ComfyUI -> parentProvider.workflowJson.isNotBlank()
+                                is ProviderSetting.Antigravity -> true
                                 is ProviderSetting.LiteRtLocal -> true
                             }
                             
@@ -2113,6 +2128,12 @@ private suspend fun probeModelCapabilities(
         )
 
         is ProviderSetting.Claude -> probeModelCapabilities(
+            providerInstance = providerManager.getProviderByType(provider),
+            provider = provider,
+            model = model,
+        )
+
+        is ProviderSetting.Antigravity -> probeModelCapabilities(
             providerInstance = providerManager.getProviderByType(provider),
             provider = provider,
             model = model,
@@ -2333,6 +2354,13 @@ private fun buildToolProbeCustomBodies(provider: ProviderSetting): List<CustomBo
             )
         )
         is ProviderSetting.OpenAI -> listOf(
+            CustomBody(
+                key = "tool_choice",
+                value = JsonPrimitive("required"),
+            )
+        )
+
+        is ProviderSetting.Antigravity -> listOf(
             CustomBody(
                 key = "tool_choice",
                 value = JsonPrimitive("required"),

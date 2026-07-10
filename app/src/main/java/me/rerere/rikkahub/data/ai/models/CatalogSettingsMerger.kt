@@ -81,6 +81,8 @@ private fun ProviderSetting.withCatalogProviderDefaults(
 
         is ProviderSetting.ComfyUI -> copy(customIconUri = resolvedIcon)
 
+        is ProviderSetting.Antigravity -> copy(customIconUri = resolvedIcon)
+
         is ProviderSetting.LiteRtLocal -> this // on-device provider is not catalog-managed
     }
 }
@@ -147,6 +149,7 @@ private val ProviderSetting.matchType: CatalogProviderType
         is ProviderSetting.Google -> CatalogProviderType.GOOGLE
         is ProviderSetting.Claude -> CatalogProviderType.CLAUDE
         is ProviderSetting.ComfyUI -> CatalogProviderType.OPENAI
+        is ProviderSetting.Antigravity -> CatalogProviderType.OPENAI
         is ProviderSetting.LiteRtLocal -> CatalogProviderType.OPENAI
     }
 
@@ -157,6 +160,7 @@ private fun ProviderSetting.baseUrlForCatalogMatch(): String {
         is ProviderSetting.Google -> baseUrl
         is ProviderSetting.Claude -> baseUrl
         is ProviderSetting.ComfyUI -> baseUrl
+        is ProviderSetting.Antigravity -> baseUrl
         is ProviderSetting.LiteRtLocal -> ""
     }
 }

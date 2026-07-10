@@ -52,8 +52,8 @@ fun ProviderBalanceText(
     style: TextStyle = LocalTextStyle.current,
     color: Color = Color.Unspecified
 ) {
-    if (!providerSetting.balanceOption.enabled || providerSetting !is ProviderSetting.OpenAI) {
-        // Balance option is disabled or provider is not OpenAI type
+    if (!providerSetting.balanceOption.enabled || (providerSetting !is ProviderSetting.OpenAI && providerSetting !is ProviderSetting.Antigravity)) {
+        // Balance option is disabled or provider is not OpenAI / Antigravity type
         return
     }
 

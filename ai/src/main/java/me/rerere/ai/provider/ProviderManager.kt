@@ -1,5 +1,6 @@
 package me.rerere.ai.provider
 
+import me.rerere.ai.provider.providers.AntigravityProvider
 import me.rerere.ai.provider.providers.ClaudeProvider
 import me.rerere.ai.provider.providers.ComfyUIProvider
 import me.rerere.ai.provider.providers.GoogleProvider
@@ -25,6 +26,7 @@ class ProviderManager(
         registerProvider("google", GoogleProvider(platformHttpClient, platformMediaEncoder, platformJwtSigner))
         registerProvider("claude", ClaudeProvider(platformHttpClient, platformMediaEncoder))
         registerProvider("comfyui", ComfyUIProvider(platformHttpClient))
+        registerProvider("antigravity", AntigravityProvider(platformHttpClient, platformMediaEncoder))
     }
 
     /**
@@ -60,6 +62,7 @@ class ProviderManager(
             is ProviderSetting.Google -> getProvider("google")
             is ProviderSetting.Claude -> getProvider("claude")
             is ProviderSetting.ComfyUI -> getProvider("comfyui")
+            is ProviderSetting.Antigravity -> getProvider("antigravity")
             // The on-device provider lives in :local-llm (which depends on :ai), so it can't be
             // constructed here. The app registers it at startup via registerProvider("litert_local", ...).
             is ProviderSetting.LiteRtLocal -> getProvider("litert_local")

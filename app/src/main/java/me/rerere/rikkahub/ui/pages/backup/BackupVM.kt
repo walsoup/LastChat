@@ -170,6 +170,7 @@ class BackupVM(
             is ProviderSetting.Google -> "google|${provider.baseUrl}|${provider.apiKey}"
             is ProviderSetting.Claude -> "claude|${provider.baseUrl}|${provider.apiKey}"
             is ProviderSetting.ComfyUI -> "comfyui|${provider.baseUrl}|${provider.workflowJson.hashCode()}"
+            is ProviderSetting.Antigravity -> "antigravity|${provider.baseUrl}|${provider.apiKey}"
             is ProviderSetting.LiteRtLocal -> "litert_local"
         }
     }

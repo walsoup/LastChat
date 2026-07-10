@@ -1538,6 +1538,7 @@ private fun CustomProviderKeyPage(
         is ProviderSetting.OpenAI -> "OpenAI"
         is ProviderSetting.Google -> "Google"
         is ProviderSetting.Claude -> "Claude"
+        is ProviderSetting.Antigravity -> "Antigravity"
         else -> "OpenAI"
     }
 
@@ -1545,6 +1546,7 @@ private fun CustomProviderKeyPage(
         is ProviderSetting.OpenAI -> provider.baseUrl
         is ProviderSetting.Google -> provider.baseUrl
         is ProviderSetting.Claude -> provider.baseUrl
+        is ProviderSetting.Antigravity -> provider.baseUrl
         else -> ""
     }
 
@@ -1604,6 +1606,7 @@ private fun CustomProviderKeyPage(
                         is ProviderSetting.OpenAI -> provider.copy(baseUrl = newUrl)
                         is ProviderSetting.Google -> provider.copy(baseUrl = newUrl)
                         is ProviderSetting.Claude -> provider.copy(baseUrl = newUrl)
+                        is ProviderSetting.Antigravity -> provider.copy(baseUrl = newUrl)
                         else -> provider
                     }
                     onProviderChange(newProvider)

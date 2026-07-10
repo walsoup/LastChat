@@ -218,6 +218,11 @@ class SecretKeyManager(
                         setApiKey(newProvider.id, "")
                     }
                 }
+                oldProvider is ProviderSetting.Antigravity && newProvider is ProviderSetting.Antigravity -> {
+                    if (oldProvider.apiKey.isNotBlank() && newProvider.apiKey.isBlank()) {
+                        setApiKey(newProvider.id, "")
+                    }
+                }
             }
         }
 
@@ -287,6 +292,12 @@ class SecretKeyManager(
                 updated
             }
             is ProviderSetting.Claude -> {
+                if (provider.apiKey.isNotBlank()) {
+                    setApiKey(provider.id, provider.apiKey)
+                    provider.copy(apiKey = "") // Clear plaintext
+                } else provider
+            }
+            is ProviderSetting.Antigravity -> {
                 if (provider.apiKey.isNotBlank()) {
                     setApiKey(provider.id, provider.apiKey)
                     provider.copy(apiKey = "") // Clear plaintext
@@ -451,6 +462,9 @@ class SecretKeyManager(
                 )
             }
             is ProviderSetting.Claude -> {
+                provider.copy(apiKey = getApiKey(provider.id, provider.apiKey))
+            }
+            is ProviderSetting.Antigravity -> {
                 provider.copy(apiKey = getApiKey(provider.id, provider.apiKey))
             }
 

@@ -351,6 +351,10 @@ class SettingsStore(
                                 .map { model -> model.withComfyDefaults() }
                         )
 
+                        is ProviderSetting.Antigravity -> provider.copy(
+                            models = provider.models.distinctBy { model -> model.id }
+                        )
+
                         is ProviderSetting.LiteRtLocal -> provider.copy(
                             models = provider.models.distinctBy { model -> model.id }
                         )

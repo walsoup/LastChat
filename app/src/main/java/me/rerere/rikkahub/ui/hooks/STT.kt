@@ -142,6 +142,7 @@ private class CustomSttStateImpl(
         if (model.type == ModelType.STT) {
             return when (provider) {
                 is ProviderSetting.OpenAI -> OpenAICompatibleASRController(context, httpClient, provider, model)
+                is ProviderSetting.Antigravity -> OpenAICompatibleASRController(context, httpClient, provider.toOpenAI(), model)
                 else -> null
             }
         }

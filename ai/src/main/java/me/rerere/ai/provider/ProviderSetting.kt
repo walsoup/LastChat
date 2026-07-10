@@ -355,6 +355,66 @@ sealed class ProviderSetting {
         )
     }
 
+    @Serializable
+    @SerialName("antigravity")
+    data class Antigravity(
+        override var id: Uuid = Uuid.random(),
+        override var enabled: Boolean = true,
+        override var name: String = "Antigravity",
+        override var models: List<Model> = emptyList(),
+        override var proxy: ProviderProxy = ProviderProxy.None,
+        override val balanceOption: BalanceOption = BalanceOption(),
+        override var tags: List<Uuid> = emptyList(),
+        override val customIconUri: String? = null,
+        @Transient override val builtIn: Boolean = false,
+        var apiKey: String = "",
+        var baseUrl: String = "http://localhost:3000/v1",
+    ) : ProviderSetting() {
+        override fun addModel(model: Model): ProviderSetting = copy(models = models + model)
+        override fun editModel(model: Model): ProviderSetting = copy(models = models.map { if (it.id == model.id) model.copy() else it })
+        override fun delModel(model: Model): ProviderSetting = copy(models = models.filter { it.id != model.id })
+        override fun moveModel(from: Int, to: Int): ProviderSetting = copy(models = models.toMutableList().apply { add(to, removeAt(from)) })
+        override fun copyProvider(
+            id: Uuid,
+            enabled: Boolean,
+            name: String,
+            models: List<Model>,
+            proxy: ProviderProxy,
+            balanceOption: BalanceOption,
+            tags: List<Uuid>,
+            customIconUri: String?,
+            builtIn: Boolean,
+        ): ProviderSetting = this.copy(
+            id = id,
+            enabled = enabled,
+            name = name,
+            models = models,
+            proxy = proxy,
+            balanceOption = balanceOption,
+            tags = tags,
+            customIconUri = customIconUri,
+            builtIn = builtIn,
+        )
+
+        fun toOpenAI(): OpenAI {
+            return OpenAI(
+                id = this.id,
+                enabled = this.enabled,
+                name = this.name,
+                models = this.models,
+                proxy = this.proxy,
+                balanceOption = this.balanceOption,
+                tags = this.tags,
+                customIconUri = this.customIconUri,
+                builtIn = this.builtIn,
+                apiKey = this.apiKey,
+                baseUrl = this.baseUrl,
+                chatCompletionsPath = "/chat/completions",
+                useResponseApi = false
+            )
+        }
+    }
+
     companion object {
         /** Stable id of the single on-device provider. */
         val LOCAL_PROVIDER_ID: Uuid = Uuid.parse("10ca110c-0ca1-4b0c-a10c-10ca110c10ca")
@@ -364,6 +424,7 @@ sealed class ProviderSetting {
                 OpenAI::class,
                 Google::class,
                 Claude::class,
+                Antigravity::class,
             )
         }
     }

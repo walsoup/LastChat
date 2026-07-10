@@ -161,6 +161,7 @@ fun ProviderConfigure(
                             is ProviderSetting.OpenAI -> provider.copy(enabled = enabled)
                             is ProviderSetting.Google -> provider.copy(enabled = enabled)
                             is ProviderSetting.Claude -> provider.copy(enabled = enabled)
+                            is ProviderSetting.Antigravity -> provider.copy(enabled = enabled)
                             is ProviderSetting.ComfyUI -> provider.copy(enabled = enabled)
                             is ProviderSetting.LiteRtLocal -> provider.copy(enabled = enabled)
                         }
@@ -213,6 +214,7 @@ fun ProviderConfigure(
                         is ProviderSetting.OpenAI -> provider.copy(name = newName)
                         is ProviderSetting.Google -> provider.copy(name = newName)
                         is ProviderSetting.Claude -> provider.copy(name = newName)
+                        is ProviderSetting.Antigravity -> provider.copy(name = newName)
                         is ProviderSetting.ComfyUI -> provider.copy(name = newName)
                         is ProviderSetting.LiteRtLocal -> provider.copy(name = newName)
                     }
@@ -238,6 +240,10 @@ fun ProviderConfigure(
 
             is ProviderSetting.Claude -> {
                 ProviderConfigureClaude(provider, onEdit)
+            }
+
+            is ProviderSetting.Antigravity -> {
+                ProviderConfigureAntigravity(provider, onEdit)
             }
 
             is ProviderSetting.ComfyUI -> {
@@ -357,6 +363,7 @@ fun ProviderSetting.convertTo(type: KClass<out ProviderSetting>): ProviderSettin
         is ProviderSetting.OpenAI -> this.apiKey
         is ProviderSetting.Google -> this.apiKey
         is ProviderSetting.Claude -> this.apiKey
+        is ProviderSetting.Antigravity -> this.apiKey
         is ProviderSetting.ComfyUI -> ""
         is ProviderSetting.LiteRtLocal -> ""
     }
@@ -365,6 +372,7 @@ fun ProviderSetting.convertTo(type: KClass<out ProviderSetting>): ProviderSettin
         is ProviderSetting.OpenAI -> this.baseUrl
         is ProviderSetting.Google -> this.baseUrl
         is ProviderSetting.Claude -> this.baseUrl
+        is ProviderSetting.Antigravity -> this.baseUrl
         is ProviderSetting.ComfyUI -> this.baseUrl
         else -> ""
     }
@@ -372,6 +380,7 @@ fun ProviderSetting.convertTo(type: KClass<out ProviderSetting>): ProviderSettin
         ProviderSetting.OpenAI::class -> ProviderSetting.OpenAI().baseUrl
         ProviderSetting.Google::class -> ProviderSetting.Google().baseUrl
         ProviderSetting.Claude::class -> ProviderSetting.Claude().baseUrl
+        ProviderSetting.Antigravity::class -> ProviderSetting.Antigravity().baseUrl
         ProviderSetting.ComfyUI::class -> ProviderSetting.ComfyUI().baseUrl
         else -> return this
     }
@@ -432,6 +441,20 @@ fun ProviderSetting.convertTo(type: KClass<out ProviderSetting>): ProviderSettin
             baseUrl = convertedBaseUrl
         )
 
+        ProviderSetting.Antigravity::class -> ProviderSetting.Antigravity(
+            id = this.id,
+            enabled = this.enabled,
+            name = convertedName,
+            models = this.models,
+            proxy = this.proxy,
+            balanceOption = this.balanceOption,
+            tags = this.tags,
+            customIconUri = this.customIconUri,
+            builtIn = this.builtIn,
+            apiKey = apiKey,
+            baseUrl = convertedBaseUrl
+        )
+
         ProviderSetting.ComfyUI::class -> ProviderSetting.ComfyUI(
             id = this.id,
             enabled = this.enabled,
@@ -469,6 +492,7 @@ private fun KClass<out ProviderSetting>.defaultProviderName(): String {
         ProviderSetting.OpenAI::class -> ProviderSetting.OpenAI().name
         ProviderSetting.Google::class -> ProviderSetting.Google().name
         ProviderSetting.Claude::class -> ProviderSetting.Claude().name
+        ProviderSetting.Antigravity::class -> ProviderSetting.Antigravity().name
         ProviderSetting.ComfyUI::class -> ProviderSetting.ComfyUI().name
         else -> simpleName.orEmpty()
     }
@@ -943,4 +967,27 @@ private fun ColumnScope.ProviderConfigureGoogle(
             modifier = Modifier.fillMaxWidth(),
         )
     }
+}
+
+@Composable
+private fun ColumnScope.ProviderConfigureAntigravity(
+    provider: ProviderSetting.Antigravity,
+    onEdit: (provider: ProviderSetting.Antigravity) -> Unit
+) {
+    DebouncedTextField(
+        value = provider.apiKey,
+        onValueChange = { onEdit(provider.copy(apiKey = it.trim())) },
+        stateKey = "antigravity_api_key_${provider.id}",
+        label = stringResource(id = R.string.setting_provider_page_api_key) + " (Password)",
+        modifier = Modifier.fillMaxWidth(),
+        isSecure = true
+    )
+
+    DebouncedTextField(
+        value = provider.baseUrl,
+        onValueChange = { onEdit(provider.copy(baseUrl = it.trim())) },
+        stateKey = "antigravity_base_url_${provider.id}",
+        label = stringResource(id = R.string.setting_provider_page_api_base_url),
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
