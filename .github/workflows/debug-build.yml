@@ -21,6 +21,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install web-ui dependencies
+        working-directory: web-ui
+        run: npm ci || npm install
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
