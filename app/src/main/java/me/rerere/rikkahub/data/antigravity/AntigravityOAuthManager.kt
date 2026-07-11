@@ -408,8 +408,8 @@ class AntigravityOAuthManager(
 
     companion object {
         private const val TAG = "AntigravityOAuthManager"
-        val CLIENT_ID = "moc.tnetnocresuelgoog.sppa.pe304g4h2jolotv532erc12h2nisshmt-1950606001701".reversed()
-        val CLIENT_SECRET = "fADq6zCXs8BLm1LdLj684RWF85K-XPSC9G".reversed()
+        val CLIENT_ID = "moc.tnetnocresuelgoog.sppa.4f81lq480pivqfv0enaqgcf5g78v794l-141135899211".reversed()
+        val CLIENT_SECRET = "mXQDBBqAxmtbHdQ13M-1bSb4qvfw-XPSCOG".reversed()
         const val TOKEN_URL = "https://oauth2.googleapis.com/token"
         const val AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 
