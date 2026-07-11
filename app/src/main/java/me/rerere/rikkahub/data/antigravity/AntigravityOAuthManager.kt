@@ -116,6 +116,16 @@ class AntigravityOAuthManager(
      * redirects back to the `lastchat://antigravity/oauth` deep link (custom-scheme fallback path).
      */
     fun handleDeepLink(uri: Uri) {
+        // The Ktor callback page redirects the browser to lastchat://antigravity/oauth?status=success|error
+        // purely as a visual "return to app" signal. Such URIs carry no OAuth params and must NOT be
+        // treated as a real OAuth callback — they would overwrite the genuine Success/Error status
+        // already set by the local server handler with a false "state mismatch" error.
+        val statusOnly = uri.getQueryParameter("status")
+        if (statusOnly != null && uri.getQueryParameter("state") == null) {
+            Log.i(TAG, "handleDeepLink: status-only callback ($statusOnly), ignoring — already handled by local server")
+            return
+        }
+
         val callbackState = uri.getQueryParameter("state")
         val code = uri.getQueryParameter("code")
         val error = uri.getQueryParameter("error")
