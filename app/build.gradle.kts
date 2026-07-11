@@ -353,9 +353,7 @@ dependencies {
     implementation(libs.androidx.palette.ktx)
 
     // WebDav
-    implementation(libs.dav4jvm) {
-        exclude(group = "org.ogce", module = "xpp3")
-    }
+    implementation(files("libs/dav4jvm-af443c2fbb.jar"))
 
     // Apache Commons Text
     implementation(libs.commons.text)

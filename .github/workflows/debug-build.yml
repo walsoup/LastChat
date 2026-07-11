@@ -21,17 +21,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build and install dav4jvm to mavenLocal
-        run: |
-          git clone https://github.com/bitfireAT/dav4jvm.git dav4jvm-src
-          cd dav4jvm-src
-          git checkout af443c2fbb7760a50e138e591b54cc62887f1e58
-          echo 'rootProject.name = "dav4jvm"' > settings.gradle.kts
-          chmod +x gradlew
-          GIT_COMMIT=af443c2fbb ./gradlew publishToMavenLocal
-          cd ..
-          rm -rf dav4jvm-src
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -87,7 +76,7 @@ jobs:
       - name: Build Debug APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --refresh-dependencies
+          ./gradlew assembleDebug
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
