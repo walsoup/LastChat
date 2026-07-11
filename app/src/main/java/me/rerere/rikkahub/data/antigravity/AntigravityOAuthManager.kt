@@ -4,6 +4,15 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import io.ktor.http.ContentType
+import io.ktor.server.application.call
+import io.ktor.server.cio.CIO
+import io.ktor.server.cio.CIOApplicationEngine
+import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.get
+import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +34,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.ServerSocket
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -53,6 +63,9 @@ class AntigravityOAuthManager(
     private val client: OkHttpClient,
     private val settingsStore: SettingsStore,
 ) {
+    private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
+    /** The redirect URI we're currently using (localhost or custom scheme). Null = not started yet. */
+    private var activeRedirectUri: String? = null
     private val sessions = ConcurrentHashMap<String, OAuthSession>()
     private val _status = MutableStateFlow<AntigravityOAuthStatus>(AntigravityOAuthStatus.Idle)
     val status: StateFlow<AntigravityOAuthStatus> = _status.asStateFlow()
@@ -65,7 +78,7 @@ class AntigravityOAuthManager(
             val digest = MessageDigest.getInstance("SHA-256").digest(verifier.encodeToByteArray())
             val challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
 
-            val redirect = REDIRECT_URI
+            val redirect = ensureCallbackServer()
             sessions[state] = OAuthSession(
                 verifier = verifier,
                 redirectUri = redirect,
@@ -99,65 +112,125 @@ class AntigravityOAuthManager(
     }
 
     /**
-     * Called by [me.rerere.rikkahub.ui.activity.AntigravityOAuthRedirectActivity] when
-     * Google redirects back to the lastchat://antigravity/oauth deep link.
+     * Called by [me.rerere.rikkahub.ui.activity.AntigravityOAuthRedirectActivity] when Google
+     * redirects back to the `lastchat://antigravity/oauth` deep link (custom-scheme fallback path).
      */
     fun handleDeepLink(uri: Uri) {
         val callbackState = uri.getQueryParameter("state")
         val code = uri.getQueryParameter("code")
         val error = uri.getQueryParameter("error")
         val session = callbackState?.let(sessions::remove)
-
         when {
-            session == null -> {
-                _status.value = AntigravityOAuthStatus.Error("OAuth state mismatch or expired session")
-            }
-            !error.isNullOrBlank() -> {
-                _status.value = AntigravityOAuthStatus.Error(error)
-            }
-            code.isNullOrBlank() -> {
-                _status.value = AntigravityOAuthStatus.Error("Missing authorization code")
-            }
-            else -> {
-                scope.launch {
-                    try {
-                        val tokenResponse = exchangeCode(code, session)
-                        val email = getUserEmail(tokenResponse.accessToken)
-                        val projectId = getProjectId(tokenResponse.accessToken)
-                        val newExpiry = System.currentTimeMillis() + tokenResponse.expiresIn * 1000
-
-                        settingsStore.update { settings ->
-                            settings.copy(
-                                providers = settings.providers.map { provider ->
-                                    if (provider.id == session.providerId && provider is ProviderSetting.Antigravity) {
-                                        provider.copy(
-                                            accessToken = tokenResponse.accessToken,
-                                            refreshToken = tokenResponse.refreshToken ?: provider.refreshToken,
-                                            tokenExpiry = newExpiry,
-                                            email = email,
-                                            projectId = projectId
-                                        )
-                                    } else {
-                                        provider
-                                    }
-                                }
-                            )
-                        }
-
-                        _status.value = AntigravityOAuthStatus.Success(session.providerId)
-                    } catch (error: Throwable) {
-                        Log.e(TAG, "OAuth token exchange failed", error)
-                        _status.value = AntigravityOAuthStatus.Error(
-                            error.message ?: "OAuth token exchange failed"
-                        )
-                    }
-                }
-            }
+            session == null -> _status.value = AntigravityOAuthStatus.Error("OAuth state mismatch or expired session")
+            !error.isNullOrBlank() -> _status.value = AntigravityOAuthStatus.Error(error)
+            code.isNullOrBlank() -> _status.value = AntigravityOAuthStatus.Error("Missing authorization code")
+            else -> scope.launch { processAuthCode(code, session) }
         }
     }
 
     fun consumeResult() {
         _status.value = AntigravityOAuthStatus.Idle
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal: callback server setup
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the redirect URI to use for this login attempt.
+     *
+     * Strategy:
+     *  1. Try to start a Ktor server on a random free port → `http://127.0.0.1:<port>/oauth-callback`
+     *     (works with Desktop-app OAuth clients; Google allows any loopback port)
+     *  2. If that fails for any reason, fall back silently to the custom URI scheme
+     *     `lastchat://antigravity/oauth` handled by [AntigravityOAuthRedirectActivity].
+     */
+    @Synchronized
+    private fun ensureCallbackServer(): String {
+        // Reuse if already set up
+        activeRedirectUri?.let { return it }
+
+        return try {
+            val port = findFreePort()
+            server = embeddedServer(CIO, host = "127.0.0.1", port = port) {
+                routing {
+                    get("/oauth-callback") {
+                        val callbackState = call.request.queryParameters["state"]
+                        val code = call.request.queryParameters["code"]
+                        val error = call.request.queryParameters["error"]
+                        val session = callbackState?.let(sessions::remove)
+                        when {
+                            session == null -> {
+                                _status.value = AntigravityOAuthStatus.Error("OAuth state mismatch")
+                                call.respondText(callbackPage(false), ContentType.Text.Html)
+                            }
+                            !error.isNullOrBlank() -> {
+                                _status.value = AntigravityOAuthStatus.Error(error)
+                                call.respondText(callbackPage(false), ContentType.Text.Html)
+                            }
+                            code.isNullOrBlank() -> {
+                                _status.value = AntigravityOAuthStatus.Error("Missing authorization code")
+                                call.respondText(callbackPage(false), ContentType.Text.Html)
+                            }
+                            else -> {
+                                call.respondText(callbackPage(true), ContentType.Text.Html)
+                                scope.launch { processAuthCode(code, session) }
+                            }
+                        }
+                    }
+                }
+            }.start(wait = false)
+
+            val uri = "http://127.0.0.1:$port/oauth-callback"
+            Log.i(TAG, "OAuth callback server started on port $port")
+            activeRedirectUri = uri
+            uri
+        } catch (e: Throwable) {
+            Log.w(TAG, "Could not start Ktor callback server, falling back to custom URI scheme: ${e.message}")
+            activeRedirectUri = CUSTOM_SCHEME_REDIRECT
+            CUSTOM_SCHEME_REDIRECT
+        }
+    }
+
+    /** Finds a free port by letting the OS pick one. */
+    private fun findFreePort(): Int = ServerSocket(0).use { it.localPort }
+
+    // -------------------------------------------------------------------------
+    // Internal: shared token exchange logic
+    // -------------------------------------------------------------------------
+
+    private suspend fun processAuthCode(code: String, session: OAuthSession) {
+        try {
+            val tokenResponse = exchangeCode(code, session)
+            val email = getUserEmail(tokenResponse.accessToken)
+            val projectId = getProjectId(tokenResponse.accessToken)
+            val newExpiry = System.currentTimeMillis() + tokenResponse.expiresIn * 1000
+
+            settingsStore.update { settings ->
+                settings.copy(
+                    providers = settings.providers.map { provider ->
+                        if (provider.id == session.providerId && provider is ProviderSetting.Antigravity) {
+                            provider.copy(
+                                accessToken = tokenResponse.accessToken,
+                                refreshToken = tokenResponse.refreshToken ?: provider.refreshToken,
+                                tokenExpiry = newExpiry,
+                                email = email,
+                                projectId = projectId
+                            )
+                        } else {
+                            provider
+                        }
+                    }
+                )
+            }
+
+            _status.value = AntigravityOAuthStatus.Success(session.providerId)
+        } catch (error: Throwable) {
+            Log.e(TAG, "OAuth token exchange failed", error)
+            _status.value = AntigravityOAuthStatus.Error(
+                error.message ?: "OAuth token exchange failed"
+            )
+        }
     }
 
     private suspend fun exchangeCode(code: String, session: OAuthSession): GoogleTokenResponse {
@@ -204,6 +277,10 @@ class AntigravityOAuthManager(
         }
         return json.decodeFromString<GoogleTokenResponse>(body)
     }
+
+    // -------------------------------------------------------------------------
+    // Internal: API helpers
+    // -------------------------------------------------------------------------
 
     private suspend fun getUserEmail(accessToken: String): String {
         val response = client.newCall(
@@ -260,13 +337,11 @@ class AntigravityOAuthManager(
                         } else {
                             project.jsonObject["id"]?.jsonPrimitive?.content ?: ""
                         }
-                        if (pid.isNotEmpty()) {
-                            return pid
-                        }
+                        if (pid.isNotEmpty()) return pid
                     }
                 }
             } catch (e: Exception) {
-                Log.w("AntigravityOAuth", "Failed to fetch project ID for ideType $ideType", e)
+                Log.w(TAG, "Failed to fetch project ID for ideType $ideType", e)
             }
         }
         error("Failed to retrieve Google Cloud Project ID. Make sure your account has access to Gemini/Code Assist.")
@@ -282,9 +357,7 @@ class AntigravityOAuthManager(
 
         val quotaUser = "device-$deviceId"
         val apiClient = "google-cloud-sdk vscode/1.96.0"
-
-        val osVersions = listOf("14.5", "15.0", "15.1", "15.2")
-        val osVersion = osVersions.random()
+        val osVersion = listOf("14.5", "15.0", "15.1", "15.2").random()
 
         val clientMetadata = buildJsonObject {
             put("ideType", "VSCODE")
@@ -303,6 +376,30 @@ class AntigravityOAuthManager(
         )
     }
 
+    private fun callbackPage(success: Boolean): String {
+        val deepLink = "lastchat://antigravity/oauth?status=${if (success) "success" else "error"}"
+        val heading = if (success) "Google Sign-in complete" else "Google Sign-in failed"
+        val message = if (success) "Returning to LastChat…" else "Return to LastChat to try again."
+        return """
+            <!doctype html>
+            <html>
+              <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>LastChat Google sign-in</title>
+              </head>
+              <body>
+                <p>$heading</p>
+                <p>$message</p>
+                <p><a href="$deepLink">Return to LastChat</a></p>
+                <script>
+                  window.location.replace("$deepLink");
+                </script>
+              </body>
+            </html>
+        """.trimIndent()
+    }
+
     private fun randomUrlSafe(size: Int): String {
         val bytes = ByteArray(size)
         SecureRandom().nextBytes(bytes)
@@ -315,7 +412,13 @@ class AntigravityOAuthManager(
         val CLIENT_SECRET = "fADq6zCXs8BLm1LdLj684RWF85K-XPSC9G".reversed()
         const val TOKEN_URL = "https://oauth2.googleapis.com/token"
         const val AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-        const val REDIRECT_URI = "lastchat://antigravity/oauth"
+
+        /**
+         * Custom URI scheme redirect — used as fallback when the local Ktor server can't start.
+         * Register this in Google Cloud Console as an allowed redirect URI alongside
+         * `http://127.0.0.1` (Desktop app clients accept any loopback port).
+         */
+        const val CUSTOM_SCHEME_REDIRECT = "lastchat://antigravity/oauth"
 
         val DEFAULT_SCOPES = listOf(
             "https://www.googleapis.com/auth/cloud-platform",
