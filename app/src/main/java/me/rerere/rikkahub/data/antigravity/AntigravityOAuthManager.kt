@@ -30,10 +30,10 @@ import me.rerere.common.platform.android.await
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import okhttp3.FormBody
-import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -269,7 +269,7 @@ class AntigravityOAuthManager(
                 val response = client.newCall(
                     Request.Builder()
                         .url("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
-                        .post(RequestBody.create(MediaType.parse("application/json"), requestBody.toString()))
+                        .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                         .addHeader("Authorization", "Bearer $accessToken")
                         .addHeader("x-goog-api-client", fingerprint.apiClient)
                         .addHeader("x-goog-quotauser", fingerprint.quotaUser)
