@@ -411,12 +411,12 @@ class AntigravityOAuthManager(
     }
 
     private fun randomUrlSafe(size: Int): String {
-        val bytes = ByteArray(size)
-        SecureRandom().nextBytes(bytes)
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
-    }
+            val bytes = ByteArray(size)
+            SecureRandom().nextBytes(bytes)
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+        }
 
-    companion object {
+        companion object {
             private const val TAG = "AntigravityOAuthManager"
             val CLIENT_ID = "moc.tnetnocresuelgoog.sppa.pe304g4hjolotv532ercl12h2nisshmt-1950606001701".reversed()
             val CLIENT_SECRET = "fADq6z4CXs8BLm1JLdL684RWF85K-XPSCOG".reversed()
@@ -432,6 +432,7 @@ class AntigravityOAuthManager(
             ).joinToString(" ")
             const val USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Antigravity/2.2.1 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36"
         }
+    }
 
     private data class OAuthSession(
         val verifier: String,
