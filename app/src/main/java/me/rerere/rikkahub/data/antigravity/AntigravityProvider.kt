@@ -13,8 +13,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
+import me.rerere.ai.util.removeElements
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -227,7 +229,7 @@ class AntigravityProvider(
             return@callbackFlow
         }
 
-        val googleModel = resolveGoogleModel(params.model.modelId, params.thinkingBudget)
+        val googleModel = resolveGoogleModel(params.model.modelId, params.thinkingBudget ?: 0)
         val sanitizeAntigravityPrompts = true
         val sanitizeToolNames = true
         val googleSearch = providerSetting.googleSearch
@@ -327,7 +329,7 @@ class AntigravityProvider(
             }
         }
 
-        val maxOutputTokens = if (googleModel.contains("thinking") || params.thinkingBudget > 0) {
+        val maxOutputTokens = if (googleModel.contains("thinking") || (params.thinkingBudget ?: 0) > 0) {
             val mt = params.maxTokens ?: 0
             if (mt <= 0) 64000 else mt.coerceIn(64000, 2000000)
         } else {
@@ -343,7 +345,8 @@ class AntigravityProvider(
             val isThinkingEligible = googleModel.contains("thinking") || googleModel.contains("gemini-3") || googleModel.contains("agent")
             if (isThinkingEligible) {
                 put("thinkingConfig", buildJsonObject {
-                    put("thinkingBudget", if (params.thinkingBudget > 0) params.thinkingBudget else 16000)
+                    val budget = params.thinkingBudget ?: 16000
+                    put("thinkingBudget", if (budget <= 0) 16000 else budget)
                     put("includeThoughts", true)
                 })
             }
@@ -357,7 +360,18 @@ class AntigravityProvider(
                         add(buildJsonObject {
                             put("name", cleanName)
                             put("description", t.description)
-                            put("parameters", json.parseToJsonElement(t.parameters))
+                            val schema = json.encodeToJsonElement(t.parameters())
+                                .removeElements(
+                                    listOf(
+                                        "const",
+                                        "exclusiveMaximum",
+                                        "exclusiveMinimum",
+                                        "format",
+                                        "additionalProperties",
+                                        "enum",
+                                    )
+                                )
+                            put("parameters", schema)
                         })
                     }
                 }
