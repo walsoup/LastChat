@@ -368,7 +368,14 @@ sealed class ProviderSetting {
         override val customIconUri: String? = null,
         @Transient override val builtIn: Boolean = false,
         var apiKey: String = "",
-        var baseUrl: String = "http://localhost:3000/v1",
+        var baseUrl: String = "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        var accessToken: String = "",
+        var refreshToken: String = "",
+        var tokenExpiry: Long = 0L,
+        var email: String = "",
+        var projectId: String = "",
+        var googleSearch: Boolean = false,
+        var obscureModels: Boolean = false,
     ) : ProviderSetting() {
         override fun addModel(model: Model): ProviderSetting = copy(models = models + model)
         override fun editModel(model: Model): ProviderSetting = copy(models = models.map { if (it.id == model.id) model.copy() else it })
@@ -394,6 +401,15 @@ sealed class ProviderSetting {
             tags = tags,
             customIconUri = customIconUri,
             builtIn = builtIn,
+            apiKey = this.apiKey,
+            baseUrl = this.baseUrl,
+            accessToken = this.accessToken,
+            refreshToken = this.refreshToken,
+            tokenExpiry = this.tokenExpiry,
+            email = this.email,
+            projectId = this.projectId,
+            googleSearch = this.googleSearch,
+            obscureModels = this.obscureModels
         )
 
         fun toOpenAI(): OpenAI {

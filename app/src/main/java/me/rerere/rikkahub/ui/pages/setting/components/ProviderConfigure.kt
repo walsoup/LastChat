@@ -88,6 +88,9 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.ReasoningRequestBehavior
 import me.rerere.ai.provider.withComfyDefaults
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.antigravity.AntigravityOAuthManager
+import me.rerere.rikkahub.data.antigravity.AntigravityOAuthStatus
+import org.koin.compose.koinInject
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.pages.assistant.detail.CustomBodies
 import me.rerere.rikkahub.ui.components.ui.DebouncedTextField
@@ -974,20 +977,116 @@ private fun ColumnScope.ProviderConfigureAntigravity(
     provider: ProviderSetting.Antigravity,
     onEdit: (provider: ProviderSetting.Antigravity) -> Unit
 ) {
-    DebouncedTextField(
-        value = provider.apiKey,
-        onValueChange = { onEdit(provider.copy(apiKey = it.trim())) },
-        stateKey = "antigravity_api_key_${provider.id}",
-        label = stringResource(id = R.string.setting_provider_page_api_key) + " (Password)",
-        modifier = Modifier.fillMaxWidth(),
-        isSecure = true
+    val oauthManager = koinInject<AntigravityOAuthManager>()
+    val oauthStatus by oauthManager.status.collectAsStateWithLifecycle()
+    val toaster = LocalToaster.current
+    val context = LocalContext.current
+
+    LaunchedEffect(oauthStatus) {
+        when (val status = oauthStatus) {
+            is AntigravityOAuthStatus.Success -> {
+                toaster.show(
+                    "Google Sign-in successful",
+                    type = ToastType.Success,
+                )
+                oauthManager.consumeResult()
+            }
+            is AntigravityOAuthStatus.Error -> {
+                toaster.show(status.message, type = ToastType.Error)
+                oauthManager.consumeResult()
+            }
+            else -> Unit
+        }
+    }
+
+    Text(
+        text = "Sign in with your Google account to authenticate and retrieve access tokens for Antigravity.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(bottom = 8.dp)
     )
 
-    DebouncedTextField(
-        value = provider.baseUrl,
-        onValueChange = { onEdit(provider.copy(baseUrl = it.trim())) },
-        stateKey = "antigravity_base_url_${provider.id}",
-        label = stringResource(id = R.string.setting_provider_page_api_base_url),
+    if (provider.email.isNotBlank()) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Authenticated Account",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = provider.email,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                if (provider.projectId.isNotBlank()) {
+                    Text(
+                        text = "Project ID: ${provider.projectId}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+
+    Button(
+        onClick = { oauthManager.startLogin(provider.id) },
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+    ) {
+        Text(if (provider.email.isBlank()) "Sign In with Google" else "Re-authenticate")
+    }
+
+    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+    // Toggles
+    Row(
         modifier = Modifier.fillMaxWidth(),
-    )
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "Google Search",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                "Enable/disable Google search grounding for responses",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = provider.googleSearch,
+            onCheckedChange = { onEdit(provider.copy(googleSearch = it)) }
+        )
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "Obscure Models",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                "Show/hide raw Google model names in the app",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = provider.obscureModels,
+            onCheckedChange = { onEdit(provider.copy(obscureModels = it)) }
+        )
+    }
 }

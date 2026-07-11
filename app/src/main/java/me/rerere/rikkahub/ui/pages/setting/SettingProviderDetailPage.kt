@@ -635,17 +635,13 @@ private fun SettingProviderConfigPage(
                 }
             }
 
-            if (internalProvider is ProviderSetting.OpenAI || internalProvider is ProviderSetting.Antigravity) {
-                val balanceOption = when (val p = internalProvider) {
-                    is ProviderSetting.OpenAI -> p.balanceOption
-                    is ProviderSetting.Antigravity -> p.balanceOption
-                    else -> error("unreachable")
-                }
+            if (internalProvider is ProviderSetting.OpenAI) {
+                val balanceOption = (internalProvider as ProviderSetting.OpenAI).balanceOption
                 SettingProviderBalanceOption(
                     provider = internalProvider,
                     balanceOption = balanceOption,
                     onEdit = { 
-                        val updated = internalProvider.copyProvider(balanceOption = it)
+                        val updated = (internalProvider as ProviderSetting.OpenAI).copyProvider(balanceOption = it)
                         internalProvider = updated
                         onEdit(updated)  // Auto-save like other config fields
                     }

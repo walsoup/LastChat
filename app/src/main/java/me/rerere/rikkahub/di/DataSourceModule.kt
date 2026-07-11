@@ -65,6 +65,7 @@ import me.rerere.rikkahub.data.codex.CodexAccountRepository
 import me.rerere.rikkahub.data.codex.CodexCredentialStore
 import me.rerere.rikkahub.data.codex.CodexOAuthManager
 import me.rerere.rikkahub.data.codex.CodexProvider
+import me.rerere.rikkahub.data.antigravity.AntigravityOAuthManager
 
 const val SEARCH_PLATFORM_HTTP_CLIENT = "searchPlatformHttpClient"
 private const val MCP_OKHTTP_CLIENT = "mcpOkHttpClient"
@@ -277,6 +278,15 @@ val dataSourceModule = module {
         )
     }
 
+    single {
+        AntigravityOAuthManager(
+            context = get(),
+            scope = get<me.rerere.rikkahub.AppScope>(),
+            client = get(), // uses default OkHttpClient
+            settingsStore = get(),
+        )
+    }
+
     single<PlatformHttpClient>(named(MCP_PLATFORM_HTTP_CLIENT)) {
         OkHttpPlatformHttpClient(get<OkHttpClient>(named(MCP_OKHTTP_CLIENT)))
     }
@@ -418,6 +428,16 @@ val dataSourceModule = module {
                     mediaEncoder = AndroidPlatformMediaEncoder(),
                     repository = get<CodexAccountRepository>(),
                     json = get(),
+                )
+            )
+            registerProvider(
+                "antigravity",
+                me.rerere.rikkahub.data.antigravity.AntigravityProvider(
+                    context = get(),
+                    client = get(),
+                    mediaEncoder = AndroidPlatformMediaEncoder(),
+                    oauthManager = get(),
+                    settingsStore = get(),
                 )
             )
         }
