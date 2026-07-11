@@ -75,6 +75,13 @@ val FALLBACK_PROVIDER_PRESETS = listOf(
 
 val SPECIAL_PROVIDER_PRESETS = listOf(
     ProviderPreset(
+        name = "Antigravity",
+        description = "Sign in with your Google account to use Gemini via the internal Google Cloud Code Assist API — no API key required",
+        type = ProviderSetting.Antigravity::class,
+        baseUrl = "https://cloudcode-pa.googleapis.com",
+        customIconUri = "icons/google.svg".toCatalogIconUrl(),
+    ),
+    ProviderPreset(
         name = "Local · LiteRT",
         description = "Run downloaded LiteRT language models directly on this device",
         type = ProviderSetting.LiteRtLocal::class,
@@ -198,6 +205,12 @@ fun ProviderPreset.toProviderSetting(): ProviderSetting {
         )
 
         ProviderSetting.LiteRtLocal::class -> ProviderSetting.LiteRtLocal(
+            name = name,
+            customIconUri = customIconUri,
+        )
+
+        ProviderSetting.Antigravity::class -> ProviderSetting.Antigravity(
+            id = parsedId ?: Uuid.random(),
             name = name,
             customIconUri = customIconUri,
         )

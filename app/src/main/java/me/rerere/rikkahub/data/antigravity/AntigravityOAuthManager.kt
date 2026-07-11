@@ -4,15 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
-import io.ktor.http.ContentType
-import io.ktor.server.application.call
-import io.ktor.server.cio.CIO
-import io.ktor.server.cio.CIOApplicationEngine
-import io.ktor.server.engine.EmbeddedServer
-import io.ktor.server.engine.embeddedServer
-import io.ktor.server.response.respondText
-import io.ktor.server.routing.get
-import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,15 +17,14 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import me.rerere.common.platform.android.await
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.common.platform.android.await
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -63,8 +53,6 @@ class AntigravityOAuthManager(
     private val client: OkHttpClient,
     private val settingsStore: SettingsStore,
 ) {
-    private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
-    private var callbackPort: Int? = null
     private val sessions = ConcurrentHashMap<String, OAuthSession>()
     private val _status = MutableStateFlow<AntigravityOAuthStatus>(AntigravityOAuthStatus.Idle)
     val status: StateFlow<AntigravityOAuthStatus> = _status.asStateFlow()
@@ -76,8 +64,8 @@ class AntigravityOAuthManager(
             val verifier = randomUrlSafe(32)
             val digest = MessageDigest.getInstance("SHA-256").digest(verifier.encodeToByteArray())
             val challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
-            val port = ensureCallbackServer()
-            val redirect = "http://localhost:$port/oauth-callback"
+
+            val redirect = REDIRECT_URI
             sessions[state] = OAuthSession(
                 verifier = verifier,
                 redirectUri = redirect,
@@ -110,83 +98,66 @@ class AntigravityOAuthManager(
         }
     }
 
-    fun consumeResult() {
-        _status.value = AntigravityOAuthStatus.Idle
-    }
+    /**
+     * Called by [me.rerere.rikkahub.ui.activity.AntigravityOAuthRedirectActivity] when
+     * Google redirects back to the lastchat://antigravity/oauth deep link.
+     */
+    fun handleDeepLink(uri: Uri) {
+        val callbackState = uri.getQueryParameter("state")
+        val code = uri.getQueryParameter("code")
+        val error = uri.getQueryParameter("error")
+        val session = callbackState?.let(sessions::remove)
 
-    @Synchronized
-    private fun ensureCallbackServer(): Int {
-        callbackPort?.let { return it }
-        val port = 3000
-        try {
-            server = embeddedServer(CIO, host = "127.0.0.1", port = port) {
-                routing {
-                    get("/oauth-callback") {
-                        val callbackState = call.request.queryParameters["state"]
-                        val code = call.request.queryParameters["code"]
-                        val error = call.request.queryParameters["error"]
-                        val session = callbackState?.let(sessions::remove)
-                        when {
-                            session == null -> {
-                                _status.value = AntigravityOAuthStatus.Error("OAuth state mismatch")
-                                call.respondText(callbackPage(false), ContentType.Text.Html)
-                            }
+        when {
+            session == null -> {
+                _status.value = AntigravityOAuthStatus.Error("OAuth state mismatch or expired session")
+            }
+            !error.isNullOrBlank() -> {
+                _status.value = AntigravityOAuthStatus.Error(error)
+            }
+            code.isNullOrBlank() -> {
+                _status.value = AntigravityOAuthStatus.Error("Missing authorization code")
+            }
+            else -> {
+                scope.launch {
+                    try {
+                        val tokenResponse = exchangeCode(code, session)
+                        val email = getUserEmail(tokenResponse.accessToken)
+                        val projectId = getProjectId(tokenResponse.accessToken)
+                        val newExpiry = System.currentTimeMillis() + tokenResponse.expiresIn * 1000
 
-                            !error.isNullOrBlank() -> {
-                                _status.value = AntigravityOAuthStatus.Error(error)
-                                call.respondText(callbackPage(false), ContentType.Text.Html)
-                            }
-
-                            code.isNullOrBlank() -> {
-                                _status.value = AntigravityOAuthStatus.Error("Missing authorization code")
-                                call.respondText(callbackPage(false), ContentType.Text.Html)
-                            }
-
-                            else -> {
-                                call.respondText(callbackPage(true), ContentType.Text.Html)
-                                scope.launch {
-                                    try {
-                                        val tokenResponse = exchangeCode(code, session)
-                                        val email = getUserEmail(tokenResponse.accessToken)
-                                        val projectId = getProjectId(tokenResponse.accessToken)
-                                        val newExpiry = System.currentTimeMillis() + tokenResponse.expiresIn * 1000
-
-                                        settingsStore.update { settings ->
-                                            settings.copy(
-                                                providers = settings.providers.map { provider ->
-                                                    if (provider.id == session.providerId && provider is ProviderSetting.Antigravity) {
-                                                        provider.copy(
-                                                            accessToken = tokenResponse.accessToken,
-                                                            refreshToken = tokenResponse.refreshToken ?: provider.refreshToken,
-                                                            tokenExpiry = newExpiry,
-                                                            email = email,
-                                                            projectId = projectId
-                                                        )
-                                                    } else {
-                                                        provider
-                                                    }
-                                                }
-                                            )
-                                        }
-
-                                        _status.value = AntigravityOAuthStatus.Success(session.providerId)
-                                    } catch (error: Throwable) {
-                                        Log.e(TAG, "OAuth token exchange failed", error)
-                                        _status.value = AntigravityOAuthStatus.Error(
-                                            error.message ?: "OAuth token exchange failed"
+                        settingsStore.update { settings ->
+                            settings.copy(
+                                providers = settings.providers.map { provider ->
+                                    if (provider.id == session.providerId && provider is ProviderSetting.Antigravity) {
+                                        provider.copy(
+                                            accessToken = tokenResponse.accessToken,
+                                            refreshToken = tokenResponse.refreshToken ?: provider.refreshToken,
+                                            tokenExpiry = newExpiry,
+                                            email = email,
+                                            projectId = projectId
                                         )
+                                    } else {
+                                        provider
                                     }
                                 }
-                            }
+                            )
                         }
+
+                        _status.value = AntigravityOAuthStatus.Success(session.providerId)
+                    } catch (error: Throwable) {
+                        Log.e(TAG, "OAuth token exchange failed", error)
+                        _status.value = AntigravityOAuthStatus.Error(
+                            error.message ?: "OAuth token exchange failed"
+                        )
                     }
                 }
-            }.start(wait = false)
-            callbackPort = port
-            return port
-        } catch (error: Throwable) {
-            throw IllegalStateException("Unable to start Ktor callback server on port $port", error)
+            }
         }
+    }
+
+    fun consumeResult() {
+        _status.value = AntigravityOAuthStatus.Idle
     }
 
     private suspend fun exchangeCode(code: String, session: OAuthSession): GoogleTokenResponse {
@@ -332,35 +303,6 @@ class AntigravityOAuthManager(
         )
     }
 
-    private fun callbackPage(success: Boolean): String {
-        val status = if (success) "success" else "error"
-        val deepLink = "lastchat://antigravity/oauth?status=${URLEncoder.encode(status, Charsets.UTF_8.name())}"
-        val heading = if (success) "Google Sign-in complete" else "Google Sign-in failed"
-        val message = if (success) {
-            "Returning to LastChat…"
-        } else {
-            "Return to LastChat to try again."
-        }
-        return """
-            <!doctype html>
-            <html>
-              <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <title>LastChat Google sign-in</title>
-              </head>
-              <body>
-                <p>$heading</p>
-                <p>$message</p>
-                <p><a href="$deepLink">Return to LastChat</a></p>
-                <script>
-                  window.location.replace("$deepLink");
-                </script>
-              </body>
-            </html>
-        """.trimIndent()
-    }
-
     private fun randomUrlSafe(size: Int): String {
         val bytes = ByteArray(size)
         SecureRandom().nextBytes(bytes)
@@ -373,7 +315,8 @@ class AntigravityOAuthManager(
         val CLIENT_SECRET = "fADq6zCXs8BLm1LdLj684RWF85K-XPSC9G".reversed()
         const val TOKEN_URL = "https://oauth2.googleapis.com/token"
         const val AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-        
+        const val REDIRECT_URI = "lastchat://antigravity/oauth"
+
         val DEFAULT_SCOPES = listOf(
             "https://www.googleapis.com/auth/cloud-platform",
             "https://www.googleapis.com/auth/userinfo.email",
@@ -381,7 +324,7 @@ class AntigravityOAuthManager(
             "https://www.googleapis.com/auth/cclog",
             "https://www.googleapis.com/auth/experimentsandconfigs"
         ).joinToString(" ")
-        
+
         const val USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Antigravity/2.2.1 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36"
     }
 }
