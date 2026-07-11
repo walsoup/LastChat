@@ -118,6 +118,7 @@ class AntigravityProvider(
             val accessToken = try {
                 getOrRefreshAccessToken(providerSetting)
             } catch (e: Exception) {
+                android.util.Log.e("AntigravityProvider", "Failed to get access token for model list", e)
                 return@withContext emptyList()
             }
 
@@ -139,19 +140,24 @@ class AntigravityProvider(
                     .addHeader("x-goog-quotauser", fingerprint.quotaUser)
                     .addHeader("x-client-device-id", fingerprint.deviceId)
                     .addHeader("client-metadata", fingerprint.clientMetadataJson)
-                    .addHeader("User-Agent", AntigravityOAuthManager.USER_AGENT)
+                    .addHeader("User-Agent", "antigravity")
+                    .addHeader("Content-Type", "application/json")
                     .build()
             ).await()
 
             val body = response.body.string()
             if (!response.isSuccessful) {
+                android.util.Log.e("AntigravityProvider", "fetchAvailableModels failed: ${response.code} $body")
                 return@withContext emptyList()
             }
 
             val jsonEl = json.parseToJsonElement(body).jsonObject
             val rawModels = jsonEl["availableModels"]?.jsonArray
                 ?: jsonEl["models"]?.jsonArray
-                ?: return@withContext emptyList()
+                ?: run {
+                    android.util.Log.w("AntigravityProvider", "No availableModels/models in response: $body")
+                    return@withContext emptyList()
+                }
 
             val obscure = providerSetting.obscureModels
 
