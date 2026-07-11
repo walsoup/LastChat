@@ -422,35 +422,26 @@ class AntigravityOAuthManager(
             val CLIENT_SECRET = "fADq6z4CXs8BLm1JLdL684RWF85K-XPSCOG".reversed()
             const val TOKEN_URL = "https://oauth2.googleapis.com/token"
             const val AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+            const val CUSTOM_SCHEME_REDIRECT = "lastchat://antigravity/oauth"
+            val DEFAULT_SCOPES = listOf(
+                "https://www.googleapis.com/auth/cloud-platform",
+                "https://www.googleapis.com/auth/userinfo.email",
+                "https://www.googleapis.com/auth/userinfo.profile",
+                "https://www.googleapis.com/auth/cclog",
+                "https://www.googleapis.com/auth/experimentsandconfigs"
+            ).joinToString(" ")
+            const val USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Antigravity/2.2.1 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36"
         }
-        /**
-         * Custom URI scheme redirect — used as fallback when the local Ktor server can't start.
-         * Register this in Google Cloud Console as an allowed redirect URI alongside
-         * `http://127.0.0.1` (Desktop app clients accept any loopback port).
-         */
-        const val CUSTOM_SCHEME_REDIRECT = "lastchat://antigravity/oauth"
 
-        val DEFAULT_SCOPES = listOf(
-            "https://www.googleapis.com/auth/cloud-platform",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile",
-            "https://www.googleapis.com/auth/cclog",
-            "https://www.googleapis.com/auth/experimentsandconfigs"
-        ).joinToString(" ")
+    private data class OAuthSession(
+        val verifier: String,
+        val redirectUri: String,
+        val providerId: Uuid,
+    )
 
-        const val USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Antigravity/2.2.1 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36"
+    sealed interface AntigravityOAuthStatus {
+        data object Idle : AntigravityOAuthStatus
+        data object Waiting : AntigravityOAuthStatus
+        data class Success(val providerId: Uuid) : AntigravityOAuthStatus
+        data class Error(val message: String) : AntigravityOAuthStatus
     }
-}
-
-private data class OAuthSession(
-    val verifier: String,
-    val redirectUri: String,
-    val providerId: Uuid,
-)
-
-sealed interface AntigravityOAuthStatus {
-    data object Idle : AntigravityOAuthStatus
-    data object Waiting : AntigravityOAuthStatus
-    data class Success(val providerId: Uuid) : AntigravityOAuthStatus
-    data class Error(val message: String) : AntigravityOAuthStatus
-}
