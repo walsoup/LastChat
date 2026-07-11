@@ -87,7 +87,7 @@ jobs:
       - name: Build Debug APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --refresh-dependencies
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
