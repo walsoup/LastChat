@@ -23,7 +23,7 @@ import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
-import me.rerere.ai.provider.MessageRole
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
