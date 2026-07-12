@@ -1,18 +1,24 @@
 package me.rerere.common.android
 
-private const val MAX_RECENT_LOGS = 100
+import java.util.Collections
+
+private const val MAX_RECENT_LOGS = 2000
 
 object Logging {
-    private val recentLogs = arrayListOf<String>()
+    private val recentLogs = Collections.synchronizedList(arrayListOf<String>())
 
     fun log(tag: String, message: String) {
-        recentLogs.add(0, "$tag: $message")
-        if (recentLogs.size > MAX_RECENT_LOGS) {
-            recentLogs.removeLastOrNull()
+        synchronized(recentLogs) {
+            recentLogs.add(0, "$tag: $message")
+            if (recentLogs.size > MAX_RECENT_LOGS) {
+                recentLogs.removeAt(recentLogs.size - 1)
+            }
         }
     }
 
     fun getRecentLogs(): List<String> {
-        return recentLogs
+        return synchronized(recentLogs) {
+            recentLogs.toList()
+        }
     }
 }

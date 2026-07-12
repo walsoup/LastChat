@@ -59,16 +59,11 @@ class AntigravityProvider(
     private val settingsStore: SettingsStore,
 ) : Provider<ProviderSetting.Antigravity> {
     private val sandboxEndpoints = listOf(
-        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
-        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
-        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
-        "https://autopush-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse"
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
     )
 
     private val cliEndpoints = listOf(
-        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
-        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
-        "https://autopush-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse"
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
     )
 
     private sealed interface ResultOfRequest {
@@ -242,120 +237,129 @@ class AntigravityProvider(
                 }
 
                 val jsonEl = json.parseToJsonElement(body).jsonObject
-                rawModels = jsonEl["availableModels"]?.jsonObject
-                    ?: jsonEl["models"]?.jsonObject
+                val availableModelsElement = jsonEl["availableModels"] ?: jsonEl["models"]
                 
-                if (rawModels != null) {
-                    break
+                if (availableModelsElement != null) {
+                    var geminiRemaining: Double? = null
+                    var geminiReset: String? = null
+                    var nonGeminiRemaining: Double? = null
+                    var nonGeminiReset: String? = null
+                    val fetchedModels = mutableListOf<Model>()
+
+                    fun processEntry(key: String, element: kotlinx.serialization.json.JsonElement) {
+                        val m = element.jsonObject
+                        val label = m["displayMetadata"]?.jsonObject?.get("label")?.jsonPrimitive?.contentOrNull
+                            ?: m["displayName"]?.jsonPrimitive?.contentOrNull
+                            ?: m["model"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
+                            ?: key
+
+                        val quotaInfo = m["quotaInfo"]?.jsonObject
+                        if (quotaInfo != null) {
+                            val remainingFraction = quotaInfo["remainingFraction"]?.jsonPrimitive?.doubleOrNull ?: 1.0
+                            val resetTime = quotaInfo["quotaResetTime"]?.jsonPrimitive?.contentOrNull
+                                ?: quotaInfo["resetTime"]?.jsonPrimitive?.contentOrNull
+                                ?: quotaInfo["quota_reset_time"]?.jsonPrimitive?.contentOrNull
+                                ?: ""
+
+                            val isGemini = label.contains("Gemini", ignoreCase = true) || 
+                                           label.contains("chat", ignoreCase = true) || 
+                                           label.contains("tab_flash", ignoreCase = true)
+                            val isNonGemini = label.contains("Claude", ignoreCase = true) || 
+                                              label.contains("Anthropic", ignoreCase = true) || 
+                                              label.contains("GPT", ignoreCase = true)
+
+                            if (isGemini) {
+                                if (geminiRemaining == null || remainingFraction < geminiRemaining) {
+                                    geminiRemaining = remainingFraction
+                                    geminiReset = resetTime
+                                }
+                            } else if (isNonGemini) {
+                                if (nonGeminiRemaining == null || remainingFraction < nonGeminiRemaining) {
+                                    nonGeminiRemaining = remainingFraction
+                                    nonGeminiReset = resetTime
+                                }
+                            }
+                        }
+
+                        val name = m["model"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull ?: key
+                        if (name.isNotBlank()) {
+                            val modelId = name.replace("models/", "")
+                            val displayName = if (obscure) {
+                                modelId
+                            } else {
+                                m["displayMetadata"]?.jsonObject?.get("label")?.jsonPrimitive?.contentOrNull
+                                    ?: m["displayName"]?.jsonPrimitive?.contentOrNull
+                                    ?: modelId
+                            }
+
+                            val isThinking = modelId.contains("thinking", ignoreCase = true)
+                            val abilities = buildList {
+                                add(ModelAbility.TOOL)
+                                if (isThinking) {
+                                    add(ModelAbility.REASONING)
+                                }
+                            }
+
+                            fetchedModels.add(
+                                Model(
+                                    modelId = modelId,
+                                    displayName = displayName,
+                                    inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                                    outputModalities = listOf(Modality.TEXT),
+                                    abilities = abilities
+                                )
+                            )
+                        }
+                    }
+
+                    if (availableModelsElement is kotlinx.serialization.json.JsonArray) {
+                        for (item in availableModelsElement) {
+                            val itemObj = item.jsonObject
+                            val name = itemObj["model"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
+                                ?: itemObj["displayName"]?.jsonPrimitive?.contentOrNull
+                                ?: itemObj["displayMetadata"]?.jsonObject?.get("label")?.jsonPrimitive?.contentOrNull
+                                ?: "Unknown"
+                            processEntry(name, item)
+                        }
+                    } else if (availableModelsElement is kotlinx.serialization.json.JsonObject) {
+                        for ((key, value) in availableModelsElement.entries) {
+                            processEntry(key, value)
+                        }
+                    }
+
+                    if (geminiRemaining != null || nonGeminiRemaining != null) {
+                        try {
+                            settingsStore.update { settings ->
+                                settings.copy(
+                                    providers = settings.providers.map { provider ->
+                                        if (provider.id == providerSetting.id && provider is ProviderSetting.Antigravity) {
+                                            provider.copy(
+                                                geminiQuotaRemaining = ((geminiRemaining ?: 1.0) * 100.0).toInt().coerceIn(0, 100),
+                                                geminiQuotaResetTime = geminiReset ?: "",
+                                                nonGeminiQuotaRemaining = ((nonGeminiRemaining ?: 1.0) * 100.0).toInt().coerceIn(0, 100),
+                                                nonGeminiQuotaResetTime = nonGeminiReset ?: ""
+                                            )
+                                        } else {
+                                            provider
+                                        }
+                                    }
+                                )
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("AntigravityProvider", "Failed to update quota settings", e)
+                        }
+                    }
+
+                    if (fetchedModels.isNotEmpty()) {
+                        return@withContext fetchedModels
+                    }
                 } else {
                     lastErrorMsg = "URL: $fetchUrl, missing models/availableModels in response: $body"
                 }
             }
 
-            if (rawModels == null) {
-                android.util.Log.w("AntigravityProvider", "All endpoints failed to fetch models. Last error: $lastErrorMsg")
-                return@withContext getFallbackModels(obscure)
-            }
-
-            var geminiRemaining: Double? = null
-            var geminiReset: String? = null
-            var nonGeminiRemaining: Double? = null
-            var nonGeminiReset: String? = null
-
-            for ((modelName, element) in rawModels.entries) {
-                val m = element.jsonObject
-                val label = m["displayMetadata"]?.jsonObject?.get("label")?.jsonPrimitive?.contentOrNull
-                    ?: m["displayName"]?.jsonPrimitive?.contentOrNull
-                    ?: m["model"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
-                    ?: modelName
-
-                val quotaInfo = m["quotaInfo"]?.jsonObject ?: continue
-                val remainingFraction = quotaInfo["remainingFraction"]?.jsonPrimitive?.doubleOrNull ?: 1.0
-                val resetTime = quotaInfo["quotaResetTime"]?.jsonPrimitive?.contentOrNull
-                    ?: quotaInfo["resetTime"]?.jsonPrimitive?.contentOrNull
-                    ?: quotaInfo["quota_reset_time"]?.jsonPrimitive?.contentOrNull
-                    ?: ""
-
-                val isGemini = label.contains("Gemini", ignoreCase = true) || 
-                               label.contains("chat", ignoreCase = true) || 
-                               label.contains("tab_flash", ignoreCase = true)
-                val isNonGemini = label.contains("Claude", ignoreCase = true) || 
-                                  label.contains("Anthropic", ignoreCase = true) || 
-                                  label.contains("GPT", ignoreCase = true)
-
-                if (isGemini) {
-                    if (geminiRemaining == null || remainingFraction < geminiRemaining) {
-                        geminiRemaining = remainingFraction
-                        geminiReset = resetTime
-                    }
-                } else if (isNonGemini) {
-                    if (nonGeminiRemaining == null || remainingFraction < nonGeminiRemaining) {
-                        nonGeminiRemaining = remainingFraction
-                        nonGeminiReset = resetTime
-                    }
-                }
-            }
-
-            if (geminiRemaining != null || nonGeminiRemaining != null) {
-                try {
-                    settingsStore.update { settings ->
-                        settings.copy(
-                            providers = settings.providers.map { provider ->
-                                if (provider.id == providerSetting.id && provider is ProviderSetting.Antigravity) {
-                                    provider.copy(
-                                        geminiQuotaRemaining = ((geminiRemaining ?: 1.0) * 100.0).toInt().coerceIn(0, 100),
-                                        geminiQuotaResetTime = geminiReset ?: "",
-                                        nonGeminiQuotaRemaining = ((nonGeminiRemaining ?: 1.0) * 100.0).toInt().coerceIn(0, 100),
-                                        nonGeminiQuotaResetTime = nonGeminiReset ?: ""
-                                    )
-                                } else {
-                                    provider
-                                }
-                            }
-                        )
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("AntigravityProvider", "Failed to update quota settings", e)
-                }
-            }
-
-            val fetchedModels = rawModels.entries.mapNotNull { (modelName, element) ->
-                val m = element.jsonObject
-                val name = m["model"]?.jsonObject?.get("name")?.jsonPrimitive?.content ?: modelName
-                if (name.isBlank()) return@mapNotNull null
-
-                val modelId = name.replace("models/", "")
-                val displayName = if (obscure) {
-                    modelId
-                } else {
-                    m["displayMetadata"]?.jsonObject?.get("label")?.jsonPrimitive?.content
-                        ?: m["displayName"]?.jsonPrimitive?.content
-                        ?: modelId
-                }
-
-                val isThinking = modelId.contains("thinking", ignoreCase = true)
-                val abilities = buildList {
-                    add(ModelAbility.TOOL)
-                    if (isThinking) {
-                        add(ModelAbility.REASONING)
-                    }
-                }
-
-                Model(
-                    modelId = modelId,
-                    displayName = displayName,
-                    inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
-                    outputModalities = listOf(Modality.TEXT),
-                    abilities = abilities
-                )
-            }
-
-            if (fetchedModels.isEmpty()) {
-                getFallbackModels(obscure)
-            } else {
-                fetchedModels
-            }
-        }
+            android.util.Log.w("AntigravityProvider", "All endpoints failed to fetch models. Last error: $lastErrorMsg")
+            getFallbackModels(obscure)
 
     override suspend fun getBalance(providerSetting: ProviderSetting.Antigravity): String {
         try {

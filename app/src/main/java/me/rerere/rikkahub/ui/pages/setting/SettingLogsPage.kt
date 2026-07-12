@@ -115,30 +115,59 @@ fun SettingLogsPage() {
 
     val listState = rememberLazyListState()
 
+    var logcatError by remember { mutableStateOf<String?>(null) }
+
     // Load logs function
     fun refreshLogs() {
         scope.launch {
             isLoading = true
             rawLogs.clear()
+            logcatError = null
             withContext(Dispatchers.IO) {
                 if (selectedSource == LogSource.APP_MEMORY) {
                     rawLogs.addAll(Logging.getRecentLogs())
                 } else {
                     try {
                         val process = Runtime.getRuntime().exec("logcat -d -v time")
-                        val bufferedReader = BufferedReader(InputStreamReader(process.inputStream))
                         val list = mutableListOf<String>()
-                        var line: String?
-                        while (bufferedReader.readLine().also { line = it } != null) {
-                            list.add(line!!)
+                        
+                        val readerJob = launch {
+                            val bufferedReader = BufferedReader(InputStreamReader(process.inputStream))
+                            var line: String?
+                            while (bufferedReader.readLine().also { line = it } != null) {
+                                list.add(line!!)
+                            }
                         }
-                        // Limit to last 1000 logs to avoid OOM or slow rendering
-                        val trimmed = if (list.size > 1000) list.takeLast(1000) else list
-                        // Reverse so newest is at the top
-                        rawLogs.addAll(trimmed.reversed())
+
+                        val errList = mutableListOf<String>()
+                        val errorJob = launch {
+                            val errReader = BufferedReader(InputStreamReader(process.errorStream))
+                            var line: String?
+                            while (errReader.readLine().also { line = it } != null) {
+                                errList.add(line!!)
+                            }
+                        }
+
+                        process.waitFor()
+                        readerJob.join()
+                        errorJob.join()
+
+                        if (process.exitValue() != 0) {
+                            val errMsg = errList.joinToString("\n").ifBlank { "Exit code ${process.exitValue()}" }
+                            withContext(Dispatchers.Main) {
+                                logcatError = errMsg
+                            }
+                        } else if (list.isEmpty()) {
+                            withContext(Dispatchers.Main) {
+                                logcatError = "Logcat output was empty."
+                            }
+                        } else {
+                            val trimmed = if (list.size > 1000) list.takeLast(1000) else list
+                            rawLogs.addAll(trimmed.reversed())
+                        }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) {
-                            toaster.show("Failed to read logcat: ${e.message}", ToastType.Error)
+                            logcatError = e.message ?: e.toString()
                         }
                     }
                 }
@@ -431,7 +460,24 @@ fun SettingLogsPage() {
 
             // Logs output
             Box(modifier = Modifier.weight(1f)) {
-                if (filteredLogs.isEmpty()) {
+                if (logcatError != null && selectedSource == LogSource.SYSTEM_LOGCAT && filteredLogs.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("System Logcat Restricted", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+                                Text("Android has restricted logcat read permissions for this app (common on newer OS versions).\n\nError details:\n$logcatError\n\nYou can still view \"App Memory Logs\" (above) which captures standard print outputs and Ktor/OkHttp logs.\n\nTo enable system logs, run via ADB:\nadb shell pm grant me.rerere.rikkahub android.permission.READ_LOGS", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                            }
+                        }
+                    }
+                } else if (filteredLogs.isEmpty()) {
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center

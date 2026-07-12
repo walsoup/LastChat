@@ -65,6 +65,8 @@ class LastChatApp : Application() {
     }
 
     override fun onCreate() {
+        System.setOut(java.io.PrintStream(LoggingOutputStream("STDOUT")))
+        System.setErr(java.io.PrintStream(LoggingOutputStream("STDERR")))
         super.onCreate()
         instance = this
         startKoin {
@@ -252,3 +254,19 @@ class AppScope : CoroutineScope by CoroutineScope(
             Log.e(TAG, "AppScope exception", e)
         }
 )
+
+class LoggingOutputStream(private val tag: String) : java.io.OutputStream() {
+    private val lineBuffer = StringBuilder()
+
+    override fun write(b: Int) {
+        if (b == '\n'.code) {
+            val line = lineBuffer.toString().trim()
+            if (line.isNotEmpty()) {
+                me.rerere.common.android.Logging.log(tag, line)
+            }
+            lineBuffer.setLength(0)
+        } else if (b != '\r'.code) {
+            lineBuffer.append(b.toChar())
+        }
+    }
+}
