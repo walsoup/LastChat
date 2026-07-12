@@ -57,6 +57,24 @@ class AntigravityProvider(
     private val oauthManager: AntigravityOAuthManager,
     private val settingsStore: SettingsStore,
 ) : Provider<ProviderSetting.Antigravity> {
+    private val sandboxEndpoints = listOf(
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://autopush-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse"
+    )
+
+    private val cliEndpoints = listOf(
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://autopush-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse"
+    )
+
+    private sealed interface ResultOfRequest {
+        data class Success(val eventSource: EventSource) : ResultOfRequest
+        data class Failure(val code: Int, val detail: String?, val t: Throwable?) : ResultOfRequest
+    }
+
     private val json = Json { ignoreUnknownKeys = true }
     private val toolNameRemapCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
@@ -170,46 +188,73 @@ class AntigravityProvider(
                 put("project", providerSetting.projectId)
             }
 
-            val baseUrlClean = providerSetting.baseUrl.removeSuffix("/")
-            val baseDomain = if (baseUrlClean.contains("/v1internal:streamGenerateContent")) {
-                baseUrlClean.substringBefore("/v1internal:streamGenerateContent")
-            } else {
-                baseUrlClean
-            }
-            val fetchUrl = "$baseDomain/v1internal:fetchAvailableModels"
+            val endpointsToTry = buildList {
+                add(providerSetting.baseUrl)
+                addAll(sandboxEndpoints)
+            }.distinct()
 
-            val response = try {
-                client.newCall(
-                    Request.Builder()
-                        .url(fetchUrl)
-                        .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-                        .addHeader("Authorization", "Bearer $accessToken")
-                        .addHeader("x-goog-api-client", fingerprint.apiClient)
-                        .addHeader("x-goog-quotauser", fingerprint.quotaUser)
-                        .addHeader("x-client-device-id", fingerprint.deviceId)
-                        .addHeader("client-metadata", fingerprint.clientMetadataJson)
-                        .addHeader("User-Agent", AntigravityOAuthManager.USER_AGENT)
-                        .addHeader("Content-Type", "application/json")
-                        .build()
-                ).await()
-            } catch (e: Exception) {
-                android.util.Log.e("AntigravityProvider", "fetchAvailableModels call failed", e)
-                return@withContext getFallbackModels(obscure)
-            }
+            var rawModels: JsonObject? = null
+            var lastErrorMsg = ""
 
-            val body = response.body.string()
-            if (!response.isSuccessful) {
-                android.util.Log.e("AntigravityProvider", "fetchAvailableModels failed: ${response.code} $body")
-                return@withContext getFallbackModels(obscure)
-            }
-
-            val jsonEl = json.parseToJsonElement(body).jsonObject
-            val rawModels = jsonEl["availableModels"]?.jsonObject
-                ?: jsonEl["models"]?.jsonObject
-                ?: run {
-                    android.util.Log.w("AntigravityProvider", "No availableModels/models in response: $body")
-                    return@withContext getFallbackModels(obscure)
+            for (endpoint in endpointsToTry) {
+                val baseUrlClean = endpoint.removeSuffix("/")
+                val baseDomain = if (baseUrlClean.contains("/v1internal:streamGenerateContent")) {
+                    baseUrlClean.substringBefore("/v1internal:streamGenerateContent")
+                } else {
+                    baseUrlClean
                 }
+                val fetchUrl = "$baseDomain/v1internal:fetchAvailableModels"
+
+                val clientMetadataJson = buildJsonObject {
+                    put("ideType", fingerprint.clientMetadata.ideType)
+                    put("platform", fingerprint.clientMetadata.platform)
+                    put("pluginType", fingerprint.clientMetadata.pluginType)
+                    put("osVersion", fingerprint.clientMetadata.osVersion)
+                    put("arch", fingerprint.clientMetadata.arch)
+                }.toString()
+
+                val response = try {
+                    client.newCall(
+                        Request.Builder()
+                            .url(fetchUrl)
+                            .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
+                            .addHeader("Authorization", "Bearer $accessToken")
+                            .addHeader("x-goog-api-client", fingerprint.apiClient)
+                            .addHeader("x-goog-quotauser", fingerprint.quotaUser)
+                            .addHeader("x-client-device-id", fingerprint.deviceId)
+                            .addHeader("client-metadata", clientMetadataJson)
+                            .addHeader("User-Agent", "antigravity")
+                            .addHeader("Content-Type", "application/json")
+                            .build()
+                    ).await()
+                } catch (e: Exception) {
+                    lastErrorMsg = "URL: $fetchUrl, Error: ${e.message}"
+                    android.util.Log.w("AntigravityProvider", "fetchAvailableModels call failed: $lastErrorMsg")
+                    continue
+                }
+
+                val body = response.body.string()
+                if (!response.isSuccessful) {
+                    lastErrorMsg = "URL: $fetchUrl, Code: ${response.code}, Body: $body"
+                    android.util.Log.w("AntigravityProvider", "fetchAvailableModels failed: $lastErrorMsg")
+                    continue
+                }
+
+                val jsonEl = json.parseToJsonElement(body).jsonObject
+                rawModels = jsonEl["availableModels"]?.jsonObject
+                    ?: jsonEl["models"]?.jsonObject
+                
+                if (rawModels != null) {
+                    break
+                } else {
+                    lastErrorMsg = "URL: $fetchUrl, missing models/availableModels in response: $body"
+                }
+            }
+
+            if (rawModels == null) {
+                android.util.Log.w("AntigravityProvider", "All endpoints failed to fetch models. Last error: $lastErrorMsg")
+                return@withContext getFallbackModels(obscure)
+            }
 
             var geminiRemaining: Double? = null
             var geminiReset: String? = null
@@ -548,214 +593,308 @@ class AntigravityProvider(
             put("request", requestObj)
         }
 
+        val modelLower = params.model.modelId.lowercase()
+        val isClaude = modelLower.contains("claude")
+        val isGpt = modelLower.contains("gpt")
+        val isSandboxOnly = isClaude || isGpt ||
+                modelLower.contains("gemini-3-flash") ||
+                modelLower.contains("gemini-3.5-flash") ||
+                modelLower.contains("gemini-2.") ||
+                modelLower.contains("image")
+
+        val useCliPool = !isSandboxOnly && (
+                modelLower.contains("-preview") ||
+                modelLower.contains("gemini-2.0") ||
+                modelLower.contains("gemini-2.5") ||
+                (modelLower.contains("gemini-3") && !modelLower.contains("gemini-3.1") && !modelLower.contains("flash"))
+        )
+
         val fingerprint = oauthManager.generateFingerprint(providerSetting.email)
-        val baseUrlClean = providerSetting.baseUrl.removeSuffix("/")
-        val finalUrl = if (baseUrlClean.endsWith("/v1internal:streamGenerateContent")) {
-            "$baseUrlClean?alt=sse"
-        } else if (baseUrlClean.endsWith("/v1internal:streamGenerateContent?alt=sse")) {
-            baseUrlClean
-        } else {
-            "$baseUrlClean/v1internal:streamGenerateContent?alt=sse"
-        }
 
-        val request = Request.Builder()
-            .url(finalUrl)
-            .addHeader("Authorization", "Bearer $accessToken")
-            .addHeader("x-goog-api-client", fingerprint.apiClient)
-            .addHeader("x-goog-quotauser", fingerprint.quotaUser)
-            .addHeader("x-client-device-id", fingerprint.deviceId)
-            .addHeader("client-metadata", fingerprint.clientMetadataJson)
-            .addHeader("User-Agent", AntigravityOAuthManager.USER_AGENT)
-            .addHeader("Content-Type", "application/json")
-            .addHeader("Accept", "text/event-stream")
-            .post(json.encodeToString(finalPayload).toRequestBody("application/json".toMediaType()))
-            .build()
+        val endpointsToTry = buildList {
+            add(providerSetting.baseUrl)
+            if (useCliPool) {
+                addAll(cliEndpoints)
+            } else {
+                addAll(sandboxEndpoints)
+            }
+        }.distinct()
 
-        val listener = object : EventSourceListener() {
-            override fun onOpen(eventSource: EventSource, response: Response) {
-                // Connection opened successfully
+        var activeEventSource: EventSource? = null
+        var success = false
+        var lastErrorMsg = ""
+
+        for (endpoint in endpointsToTry) {
+            val baseUrlClean = endpoint.removeSuffix("/")
+            val finalUrl = if (baseUrlClean.endsWith("/v1internal:streamGenerateContent")) {
+                "$baseUrlClean?alt=sse"
+            } else if (baseUrlClean.endsWith("/v1internal:streamGenerateContent?alt=sse")) {
+                baseUrlClean
+            } else {
+                "$baseUrlClean/v1internal:streamGenerateContent?alt=sse"
             }
 
-            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                val googleEvent = runCatching {
-                    json.parseToJsonElement(data).jsonObject
-                }.getOrElse {
-                    close(it)
-                    return
+            val requestBuilder = Request.Builder()
+                .url(finalUrl)
+                .addHeader("Authorization", "Bearer $accessToken")
+                .addHeader("Accept", "text/event-stream")
+
+            if (useCliPool && !googleModel.contains("claude")) {
+                requestBuilder
+                    .addHeader("User-Agent", fingerprint.cliUserAgent)
+                    .addHeader("x-goog-api-client", fingerprint.cliApiClient)
+                    .addHeader("x-goog-quotauser", fingerprint.quotaUser)
+                    .addHeader("x-client-device-id", fingerprint.deviceId)
+                    .addHeader("Content-Type", "application/json; charset=utf-8")
+
+                val clientMetadataStr = listOf(
+                    "ideType=${fingerprint.clientMetadata.ideType}",
+                    "platform=${fingerprint.clientMetadata.platform}",
+                    "pluginType=${fingerprint.clientMetadata.pluginType}",
+                    "osVersion=${fingerprint.clientMetadata.osVersion}",
+                    "arch=${fingerprint.clientMetadata.arch}"
+                ).joinToString(",")
+                requestBuilder.addHeader("client-metadata", clientMetadataStr)
+            } else {
+                requestBuilder
+                    .addHeader("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Antigravity/2.2.1 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36")
+                    .addHeader("x-goog-api-client", fingerprint.apiClient)
+                    .addHeader("x-goog-quotauser", fingerprint.quotaUser)
+                    .addHeader("x-client-device-id", fingerprint.deviceId)
+                    .addHeader("Content-Type", "application/json")
+
+                val clientMetadataJson = buildJsonObject {
+                    put("ideType", fingerprint.clientMetadata.ideType)
+                    put("platform", fingerprint.clientMetadata.platform)
+                    put("pluginType", fingerprint.clientMetadata.pluginType)
+                    put("osVersion", fingerprint.clientMetadata.osVersion)
+                    put("arch", fingerprint.clientMetadata.arch)
+                }.toString()
+                requestBuilder.addHeader("client-metadata", clientMetadataJson)
+
+                if (googleModel.contains("claude") || googleModel.contains("anthropic")) {
+                    requestBuilder.addHeader("anthropic-beta", "interleaved-thinking-2025-05-14")
                 }
+            }
 
-                val responseObj = googleEvent["response"]?.jsonObject ?: googleEvent
+            val request = requestBuilder
+                .post(json.encodeToString(finalPayload).toRequestBody("application/json".toMediaType()))
+                .build()
 
-                val usage = responseObj["usageMetadata"]?.jsonObject?.let { u ->
-                    TokenUsage(
-                        promptTokens = u["promptTokenCount"]?.jsonPrimitive?.intOrNull ?: 0,
-                        completionTokens = (u["candidatesTokenCount"]?.jsonPrimitive?.intOrNull ?: 0) +
-                                (u["thoughtsTokenCount"]?.jsonPrimitive?.intOrNull ?: 0),
-                        totalTokens = u["totalTokenCount"]?.jsonPrimitive?.intOrNull ?: 0,
-                        cachedTokens = u["cachedContentTokenCount"]?.jsonPrimitive?.intOrNull ?: 0
-                    )
-                }
+            val result = kotlinx.coroutines.suspendCancellableCoroutine<ResultOfRequest> { continuation ->
+                val listener = object : EventSourceListener() {
+                    var opened = false
 
-                val candidates = responseObj["candidates"]?.jsonArray
-                if (candidates == null || candidates.isEmpty()) {
-                    if (usage != null) {
-                        trySend(
-                            MessageChunk(
-                                id = "agent-${java.util.UUID.randomUUID()}",
-                                model = params.model.modelId,
-                                choices = emptyList(),
-                                usage = usage
-                            )
-                        )
+                    override fun onOpen(eventSource: EventSource, response: Response) {
+                        opened = true
+                        if (continuation.isActive) {
+                            continuation.resume(ResultOfRequest.Success(eventSource))
+                        }
                     }
-                    return
-                }
 
-                val candidate = candidates[0].jsonObject
-                val parts = candidate["content"]?.jsonObject?.get("parts")?.jsonArray
-                val finishReason = candidate["finishReason"]?.jsonPrimitive?.contentOrNull
-
-                val groundingMetadata = responseObj["groundingMetadata"]?.jsonObject
-                val groundingSources = if (groundingMetadata != null) {
-                    val chunks = groundingMetadata["groundingChunks"]?.jsonArray ?: emptyList()
-                    if (chunks.isNotEmpty()) {
-                        val sb = java.lang.StringBuilder("\n\n---\n**Sources:**\n")
-                        var addedSources = 0
-                        chunks.forEach { chunk ->
-                            val web = chunk.jsonObject["web"]?.jsonObject
-                            if (web != null) {
-                                val uri = web["uri"]?.jsonPrimitive?.contentOrNull
-                                val title = web["title"]?.jsonPrimitive?.contentOrNull
-                                if (uri != null && title != null) {
-                                    addedSources++
-                                    sb.append("$addedSources. [$title]($uri)\n")
-                                }
-                            }
-                        }
-                        if (addedSources > 0) sb.toString() else null
-                    } else null
-                } else null
-
-                val listDeltaParts = mutableListOf<UIMessagePart>()
-
-                if (parts != null) {
-                    for (partEl in parts) {
-                        val part = partEl.jsonObject
-                        val isThought = part.containsKey("thought") ||
-                                part.containsKey("thoughtText") ||
-                                part["type"]?.jsonPrimitive?.contentOrNull == "thinking"
-
-                        val text = part["text"]?.jsonPrimitive?.contentOrNull
-                        if (!text.isNullOrEmpty()) {
-                            var cleanText = text
-                            if (cleanText.contains("thoughtSignature:")) {
-                                cleanText = cleanText.replace(Regex("thoughtSignature:[a-zA-Z0-9\\-_]+"), "").trim()
-                            }
-                            if (cleanText.isNotEmpty()) {
-                                if (isThought) {
-                                    listDeltaParts.add(UIMessagePart.Reasoning(reasoning = cleanText))
-                                } else {
-                                    listDeltaParts.add(UIMessagePart.Text(text = cleanText))
-                                }
-                            }
+                    override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                        val googleEvent = runCatching {
+                            json.parseToJsonElement(data).jsonObject
+                        }.getOrElse {
+                            close(it)
+                            return
                         }
 
-                        val exec = part["executableCode"]?.jsonObject
-                        if (exec != null) {
-                            val lang = exec["language"]?.jsonPrimitive?.contentOrNull ?: "python"
-                            val code = exec["code"]?.jsonPrimitive?.contentOrNull ?: ""
-                            listDeltaParts.add(UIMessagePart.Reasoning(reasoning = "\n```$lang\n$code\n```\n"))
+                        val responseObj = googleEvent["response"]?.jsonObject ?: googleEvent
+
+                        val usage = responseObj["usageMetadata"]?.jsonObject?.let { u ->
+                            TokenUsage(
+                                promptTokens = u["promptTokenCount"]?.jsonPrimitive?.intOrNull ?: 0,
+                                completionTokens = (u["candidatesTokenCount"]?.jsonPrimitive?.intOrNull ?: 0) +
+                                        (u["thoughtsTokenCount"]?.jsonPrimitive?.intOrNull ?: 0),
+                                totalTokens = u["totalTokenCount"]?.jsonPrimitive?.intOrNull ?: 0,
+                                cachedTokens = u["cachedContentTokenCount"]?.jsonPrimitive?.intOrNull ?: 0
+                            )
                         }
 
-                        val res = part["codeExecutionResult"]?.jsonObject
-                        if (res != null) {
-                            val output = res["output"]?.jsonPrimitive?.contentOrNull ?: ""
-                            listDeltaParts.add(UIMessagePart.Reasoning(reasoning = "\n```output\n$output\n```\n"))
-                        }
-
-                        val call = part["functionCall"]?.jsonObject ?: part["function_call"]?.jsonObject
-                        if (call != null) {
-                            val rawId = call["id"]?.jsonPrimitive?.contentOrNull
-                                ?: call["callId"]?.jsonPrimitive?.contentOrNull
-                                ?: call["call_id"]?.jsonPrimitive?.contentOrNull
-                                ?: ""
-                            val callId = if (rawId.isEmpty()) {
-                                "call_${java.util.UUID.randomUUID().toString().substring(0, 8)}"
-                            } else {
-                                rawId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-                            }
-                            val name = call["name"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val originalName = getOriginalToolName(name)
-                            val argsVal = call["args"]
-                            val argumentsStr = if (argsVal is JsonPrimitive && argsVal.isString) {
-                                argsVal.content
-                            } else {
-                                json.encodeToString(argsVal ?: buildJsonObject {})
-                            }
-
-                            listDeltaParts.add(
-                                UIMessagePart.ToolCall(
-                                    toolCallId = callId,
-                                    toolName = originalName,
-                                    arguments = argumentsStr
+                        val candidates = responseObj["candidates"]?.jsonArray
+                        if (candidates == null || candidates.isEmpty()) {
+                            if (usage != null) {
+                                trySend(
+                                    MessageChunk(
+                                        id = "agent-${java.util.UUID.randomUUID()}",
+                                        model = params.model.modelId,
+                                        choices = emptyList(),
+                                        usage = usage
+                                    )
                                 )
-                            )
+                            }
+                            return
                         }
-                    }
-                }
 
-                if (groundingSources != null) {
-                    listDeltaParts.add(UIMessagePart.Text(text = groundingSources))
-                }
+                        val candidate = candidates[0].jsonObject
+                        val parts = candidate["content"]?.jsonObject?.get("parts")?.jsonArray
+                        val finishReason = candidate["finishReason"]?.jsonPrimitive?.contentOrNull
 
-                if (listDeltaParts.isNotEmpty() || finishReason != null) {
-                    val mappedFinishReason = when (finishReason) {
-                        "STOP" -> "stop"
-                        "MAX_TOKENS" -> "length"
-                        "SAFETY" -> "content_filter"
-                        "MALFORMED_FUNCTION_CALL" -> "tool_calls"
-                        else -> {
-                            if (listDeltaParts.any { it is UIMessagePart.ToolCall }) {
-                                "tool_calls"
-                            } else if (finishReason != null) {
-                                "stop"
+                        val groundingMetadata = responseObj["groundingMetadata"]?.jsonObject
+                        val groundingSources = if (groundingMetadata != null) {
+                            val chunks = groundingMetadata["groundingChunks"]?.jsonArray ?: emptyList()
+                            if (chunks.isNotEmpty()) {
+                                val sb = java.lang.StringBuilder("\n\n---\n**Sources:**\n")
+                                var addedSources = 0
+                                chunks.forEach { chunk ->
+                                    val web = chunk.jsonObject["web"]?.jsonObject
+                                    if (web != null) {
+                                        val uri = web["uri"]?.jsonPrimitive?.contentOrNull
+                                        val title = web["title"]?.jsonPrimitive?.contentOrNull
+                                        if (uri != null && title != null) {
+                                            addedSources++
+                                            sb.append("$addedSources. [$title]($uri)\n")
+                                        }
+                                    }
+                                }
+                                if (addedSources > 0) sb.toString() else null
                             } else null
+                        } else null
+
+                        val listDeltaParts = mutableListOf<UIMessagePart>()
+
+                        if (parts != null) {
+                            for (partEl in parts) {
+                                val part = partEl.jsonObject
+                                val isThought = part.containsKey("thought") ||
+                                        part.containsKey("thoughtText") ||
+                                        part["type"]?.jsonPrimitive?.contentOrNull == "thinking"
+
+                                val text = part["text"]?.jsonPrimitive?.contentOrNull
+                                if (!text.isNullOrEmpty()) {
+                                    var cleanText = text
+                                    if (cleanText.contains("thoughtSignature:")) {
+                                        cleanText = cleanText.replace(Regex("thoughtSignature:[a-zA-Z0-9\\-_]+"), "").trim()
+                                    }
+                                    if (cleanText.isNotEmpty()) {
+                                        if (isThought) {
+                                            listDeltaParts.add(UIMessagePart.Reasoning(reasoning = cleanText))
+                                        } else {
+                                            listDeltaParts.add(UIMessagePart.Text(text = cleanText))
+                                        }
+                                    }
+                                }
+
+                                val exec = part["executableCode"]?.jsonObject
+                                if (exec != null) {
+                                    val lang = exec["language"]?.jsonPrimitive?.contentOrNull ?: "python"
+                                    val code = exec["code"]?.jsonPrimitive?.contentOrNull ?: ""
+                                    listDeltaParts.add(UIMessagePart.Reasoning(reasoning = "\n```$lang\n$code\n```\n"))
+                                }
+
+                                val res = part["codeExecutionResult"]?.jsonObject
+                                if (res != null) {
+                                    val output = res["output"]?.jsonPrimitive?.contentOrNull ?: ""
+                                    listDeltaParts.add(UIMessagePart.Reasoning(reasoning = "\n```output\n$output\n```\n"))
+                                }
+
+                                val call = part["functionCall"]?.jsonObject ?: part["function_call"]?.jsonObject
+                                if (call != null) {
+                                    val rawId = call["id"]?.jsonPrimitive?.contentOrNull
+                                        ?: call["callId"]?.jsonPrimitive?.contentOrNull
+                                        ?: call["call_id"]?.jsonPrimitive?.contentOrNull
+                                        ?: ""
+                                    val callId = if (rawId.isEmpty()) {
+                                        "call_${java.util.UUID.randomUUID().toString().substring(0, 8)}"
+                                    } else {
+                                        rawId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                                    }
+                                    val name = call["name"]?.jsonPrimitive?.contentOrNull ?: ""
+                                    val originalName = getOriginalToolName(name)
+                                    val argsVal = call["args"]
+                                    val argumentsStr = if (argsVal is JsonPrimitive && argsVal.isString) {
+                                        argsVal.content
+                                    } else {
+                                        json.encodeToString(argsVal ?: buildJsonObject {})
+                                    }
+
+                                    listDeltaParts.add(
+                                        UIMessagePart.ToolCall(
+                                            toolCallId = callId,
+                                            toolName = originalName,
+                                            arguments = argumentsStr
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        if (groundingSources != null) {
+                            listDeltaParts.add(UIMessagePart.Text(text = groundingSources))
+                        }
+
+                        if (listDeltaParts.isNotEmpty() || finishReason != null) {
+                            val mappedFinishReason = when (finishReason) {
+                                "STOP" -> "stop"
+                                "MAX_TOKENS" -> "length"
+                                "SAFETY" -> "content_filter"
+                                "MALFORMED_FUNCTION_CALL" -> "tool_calls"
+                                else -> {
+                                    if (listDeltaParts.any { it is UIMessagePart.ToolCall }) {
+                                        "tool_calls"
+                                    } else if (finishReason != null) {
+                                        "stop"
+                                    } else null
+                                }
+                            }
+
+                            trySend(
+                                MessageChunk(
+                                    id = "agent-${java.util.UUID.randomUUID()}",
+                                    model = params.model.modelId,
+                                    choices = listOf(
+                                        UIMessageChoice(
+                                            index = 0,
+                                            delta = UIMessage(
+                                                role = MessageRole.ASSISTANT,
+                                                parts = listDeltaParts
+                                            ),
+                                            message = null,
+                                            finishReason = mappedFinishReason
+                                        )
+                                    ),
+                                    usage = usage
+                                )
+                            )
                         }
                     }
 
-                    trySend(
-                        MessageChunk(
-                            id = "agent-${java.util.UUID.randomUUID()}",
-                            model = params.model.modelId,
-                            choices = listOf(
-                                UIMessageChoice(
-                                    index = 0,
-                                    delta = UIMessage(
-                                        role = MessageRole.ASSISTANT,
-                                        parts = listDeltaParts
-                                    ),
-                                    message = null,
-                                    finishReason = mappedFinishReason
-                                )
-                            ),
-                            usage = usage
-                        )
-                    )
+                    override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                        val detail = runCatching { response?.body?.string() }.getOrNull()
+                        if (!opened && continuation.isActive) {
+                            continuation.resume(ResultOfRequest.Failure(response?.code ?: 500, detail, t))
+                        } else {
+                            val msg = "Antigravity Stream Error: ${response?.code} - $detail"
+                            close(Exception(msg, t))
+                        }
+                    }
+
+                    override fun onClosed(eventSource: EventSource) {
+                        close()
+                    }
                 }
+                val eventSource = EventSources.createFactory(eventSourceClient).newEventSource(request, listener)
+                continuation.invokeOnCancellation { eventSource.cancel() }
             }
 
-            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                val detail = response?.takeUnless { it.isSuccessful }?.body?.string()
-                close(t ?: IllegalStateException("Antigravity request failed: ${response?.code} $detail"))
-            }
-
-            override fun onClosed(eventSource: EventSource) {
-                close()
+            if (result is ResultOfRequest.Success) {
+                activeEventSource = result.eventSource
+                success = true
+                break
+            } else if (result is ResultOfRequest.Failure) {
+                lastErrorMsg = "URL: $finalUrl, Code: ${result.code}, Detail: ${result.detail}, Error: ${result.t?.message}"
+                android.util.Log.w("AntigravityProvider", "Endpoint failed: $lastErrorMsg")
             }
         }
 
-        val eventSource = EventSources.createFactory(eventSourceClient).newEventSource(request, listener)
-        awaitClose { eventSource.cancel() }
+        if (!success) {
+            close(Exception("All Antigravity endpoints failed. Last error: $lastErrorMsg"))
+        }
+
+        awaitClose {
+            activeEventSource?.cancel()
+        }
     }
 
     override suspend fun generateImage(

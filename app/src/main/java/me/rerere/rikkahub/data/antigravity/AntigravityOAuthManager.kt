@@ -50,11 +50,22 @@ data class GoogleTokenResponse(
     @SerialName("token_type") val tokenType: String? = null
 )
 
+data class ClientMetadata(
+    val ideType: String,
+    val platform: String,
+    val pluginType: String,
+    val osVersion: String,
+    val arch: String
+)
+
 data class DeviceFingerprint(
     val apiClient: String,
     val quotaUser: String,
     val deviceId: String,
-    val clientMetadataJson: String
+    val clientMetadataJson: String,
+    val cliUserAgent: String,
+    val cliApiClient: String,
+    val clientMetadata: ClientMetadata
 )
 
 class AntigravityOAuthManager(
@@ -367,22 +378,56 @@ class AntigravityOAuthManager(
         }
 
         val quotaUser = "device-$deviceId"
-        val apiClient = "google-cloud-sdk vscode/1.96.0"
+        
+        val platforms = listOf("darwin/x64", "darwin/arm64")
+        val platform = platforms.random()
+        val arch = if (platform.contains("arm64")) "arm64" else "x64"
         val osVersion = listOf("14.5", "15.0", "15.1", "15.2").random()
+        
+        val apiClient = listOf(
+            "google-cloud-sdk vscode/1.96.0",
+            "google-cloud-sdk vscode/1.95.0"
+        ).random()
+        
+        val cliUserAgent = listOf(
+            "google-api-nodejs-client/9.15.1",
+            "google-api-nodejs-client/9.14.0",
+            "google-api-nodejs-client/9.13.0",
+            "google-api-nodejs-client/10.3.0"
+        ).random()
+        
+        val cliApiClient = listOf(
+            "gl-node/22.17.0",
+            "gl-node/22.12.0",
+            "gl-node/20.18.0",
+            "gl-node/21.7.0",
+            "gl-node/22.18.0"
+        ).random()
+
+        val clientMetadata = ClientMetadata(
+            ideType = "VSCODE",
+            platform = "MACOS",
+            pluginType = "GEMINI",
+            osVersion = osVersion,
+            arch = arch
+        )
 
         val clientMetadataJson = listOf(
             "ideType=VSCODE",
             "platform=MACOS",
             "pluginType=GEMINI",
             "osVersion=$osVersion",
-            "arch=arm64"
+            "arch=$arch"
         ).joinToString(",")
 
         return DeviceFingerprint(
             apiClient = apiClient,
             quotaUser = quotaUser,
             deviceId = deviceId,
-            clientMetadataJson = clientMetadataJson
+            clientMetadataJson = clientMetadataJson,
+            cliUserAgent = cliUserAgent,
+            cliApiClient = cliApiClient,
+            clientMetadata = clientMetadata
         )
     }
 
