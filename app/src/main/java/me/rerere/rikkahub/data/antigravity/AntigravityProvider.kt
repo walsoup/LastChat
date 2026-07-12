@@ -360,6 +360,7 @@ class AntigravityProvider(
 
             android.util.Log.w("AntigravityProvider", "All endpoints failed to fetch models. Last error: $lastErrorMsg")
             getFallbackModels(obscure)
+        }
 
     override suspend fun getBalance(providerSetting: ProviderSetting.Antigravity): String {
         try {
