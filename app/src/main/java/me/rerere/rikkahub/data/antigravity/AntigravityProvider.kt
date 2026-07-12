@@ -808,7 +808,7 @@ class AntigravityProvider(
         val googleModel = when {
             baseModel.contains("gemini-3.1-pro") -> {
                 if (adaptiveTier == "xhigh" || adaptiveTier == "high") {
-                    "gemini-pro-agent"
+                    "gemini-3.1-pro-high"
                 } else {
                     "gemini-3.1-pro-low"
                 }
@@ -816,7 +816,7 @@ class AntigravityProvider(
             baseModel.contains("gemini-3-pro") -> "gemini-3-pro"
             baseModel.contains("gemini-3.5-flash") -> {
                 if (adaptiveTier == "xhigh" || adaptiveTier == "high") {
-                    "gemini-3-flash-agent"
+                    "gemini-3.5-flash-high"
                 } else if (adaptiveTier == "extra-low") {
                     "gemini-3.5-flash-extra-low"
                 } else {

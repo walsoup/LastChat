@@ -2,7 +2,10 @@ package me.rerere.rikkahub.data.codex
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import io.ktor.http.ContentType
 import io.ktor.server.application.call
@@ -10,24 +13,29 @@ import io.ktor.server.cio.CIO
 import io.ktor.server.cio.CIOApplicationEngine
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.netty.Netty
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import me.rerere.common.platform.android.await
 import me.rerere.rikkahub.R
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.net.ServerSocket
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.resume
 
 class CodexOAuthManager(
     private val context: Context,
@@ -122,6 +130,7 @@ class CodexOAuthManager(
                                     call.respondText(callbackPage(true), ContentType.Text.Html)
                                     scope.launch {
                                         try {
+                                            awaitNetworkUnblocked()
                                             val account = exchangeCode(code, session)
                                             _status.value = CodexOAuthStatus.Success(account.id)
                                             runCatching { repository.refreshAccount(account.id) }
@@ -149,6 +158,26 @@ class CodexOAuthManager(
             }
         }
         throw IllegalStateException(CALLBACK_PORTS_UNAVAILABLE, lastError)
+    }
+
+    private suspend fun awaitNetworkUnblocked() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
+        suspendCancellableCoroutine { continuation ->
+            lateinit var callback: ConnectivityManager.NetworkCallback
+            callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+                    if (!blocked && continuation.isActive) {
+                        runCatching { connectivityManager.unregisterNetworkCallback(callback) }
+                        continuation.resume(Unit)
+                    }
+                }
+            }
+            continuation.invokeOnCancellation {
+                runCatching { connectivityManager.unregisterNetworkCallback(callback) }
+            }
+            connectivityManager.registerDefaultNetworkCallback(callback)
+        }
     }
 
     private suspend fun exchangeCode(code: String, session: OAuthSession): CodexAccount {

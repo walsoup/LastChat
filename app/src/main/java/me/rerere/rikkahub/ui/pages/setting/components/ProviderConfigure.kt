@@ -1018,12 +1018,12 @@ private fun ColumnScope.ProviderConfigureAntigravity(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "⚠️ Warning: Internal Google API",
+                text = "⚠️ Warning: Account Suspension Risk",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
             )
             Text(
-                text = "This provider uses an internal Google API not intended for third-party use. Your Google account may be rate-limited or suspended. This app is not endorsed by or affiliated with Google. Proceed with caution.",
+                text = "This provider uses an internal API that violates Google's Terms of Service. Using it may result in your Google account being permanently banned or suspended. Use at your own risk.",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 4.dp)
             )
