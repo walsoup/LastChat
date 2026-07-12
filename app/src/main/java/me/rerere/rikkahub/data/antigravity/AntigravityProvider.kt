@@ -117,14 +117,21 @@ class AntigravityProvider(
     private fun getFallbackModels(obscure: Boolean): List<Model> {
         val defaultModels = listOf(
             "gemini-3.5-flash",
+            "gemini-3.5-flash-high",
             "gemini-3.5-flash-low",
             "gemini-3.5-flash-extra-low",
             "gemini-3.1-pro",
+            "gemini-3.1-pro-high",
             "gemini-3.1-pro-low",
+            "gemini-3-flash",
+            "gemini-3-flash-agent",
+            "gemini-pro-agent",
             "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
             "gemini-2.5-pro",
             "claude-sonnet-4-6-thinking",
-            "claude-opus-4-6-thinking"
+            "claude-opus-4-6-thinking",
+            "antigravity-auto"
         )
         return defaultModels.map { id ->
             val isThinking = id.contains("thinking", ignoreCase = true)
