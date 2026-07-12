@@ -960,9 +960,23 @@ class AntigravityProvider(
         }
 
         val googleModel = when {
-            baseModel.contains("gemini-3.1-pro") -> "gemini-3.1-pro"
+            baseModel.contains("gemini-3.1-pro") -> {
+                if (adaptiveTier == "xhigh" || adaptiveTier == "high") {
+                    "gemini-3.1-pro-high"
+                } else {
+                    "gemini-3.1-pro-low"
+                }
+            }
             baseModel.contains("gemini-3-pro") -> "gemini-3-pro"
-            baseModel.contains("gemini-3.5-flash") -> "gemini-3.5-flash"
+            baseModel.contains("gemini-3.5-flash") -> {
+                if (adaptiveTier == "xhigh" || adaptiveTier == "high") {
+                    "gemini-3.5-flash-high"
+                } else if (adaptiveTier == "extra-low") {
+                    "gemini-3.5-flash-extra-low"
+                } else {
+                    "gemini-3.5-flash-low"
+                }
+            }
             baseModel.contains("gemini-3-flash") -> "gemini-3-flash"
             else -> modelLower
         }
