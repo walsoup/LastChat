@@ -15,6 +15,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
 import me.rerere.ai.util.removeElements
 import kotlinx.serialization.json.jsonObject
@@ -115,15 +116,17 @@ class AntigravityProvider(
 
     private fun getFallbackModels(obscure: Boolean): List<Model> {
         val list = listOf(
-            "gemini-3.5-flash-low" to "Gemini 3.5 Flash (Low)",
-            "gemini-3.5-flash-medium" to "Gemini 3.5 Flash (Medium)",
+            "antigravity-auto" to "Antigravity Auto",
+            "gemini-2.5-flash" to "Gemini 2.5 Flash",
+            "gemini-2.5-flash-lite" to "Gemini 2.5 Flash Lite",
+            "gemini-2.5-pro" to "Gemini 2.5 Pro",
+            "gemini-3-flash" to "Gemini 3 Flash",
+            "gemini-3-flash-agent" to "Gemini 3 Flash Agent",
+            "gemini-3.1-pro" to "Gemini 3.1 Pro",
+            "gemini-3.5-flash" to "Gemini 3.5 Flash",
             "gemini-3.5-flash-high" to "Gemini 3.5 Flash (High)",
-            "gemini-3.1-pro-low" to "Gemini 3.1 Pro (Low)",
-            "gemini-3.1-pro-medium" to "Gemini 3.1 Pro (Medium)",
-            "gemini-3.1-pro-high" to "Gemini 3.1 Pro (High)",
-            "claude-sonnet-4-6" to "Claude 3.7 Sonnet (Default)",
-            "claude-sonnet-4-6-thinking" to "Claude 3.7 Sonnet (Thinking)",
-            "claude-opus-4-6" to "Claude 3 Opus"
+            "gemini-pro-agent" to "Gemini Pro Agent",
+            "claude-opus-4-6-thinking" to "Claude 3 Opus (Thinking)"
         )
         return list.map { (id, name) ->
             val isThinking = id.contains("thinking", ignoreCase = true)
@@ -194,6 +197,68 @@ class AntigravityProvider(
                     android.util.Log.w("AntigravityProvider", "No availableModels/models in response: $body")
                     return@withContext getFallbackModels(obscure)
                 }
+
+            var geminiRemaining: Double? = null
+            var geminiReset: String? = null
+            var nonGeminiRemaining: Double? = null
+            var nonGeminiReset: String? = null
+
+            for (element in rawModels) {
+                val m = element.jsonObject
+                val label = m["displayMetadata"]?.jsonObject?.get("label")?.jsonPrimitive?.contentOrNull
+                    ?: m["displayName"]?.jsonPrimitive?.contentOrNull
+                    ?: m["model"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
+                    ?: ""
+
+                val quotaInfo = m["quotaInfo"]?.jsonObject ?: continue
+                val remainingFraction = quotaInfo["remainingFraction"]?.jsonPrimitive?.doubleOrNull ?: 1.0
+                val resetTime = quotaInfo["quotaResetTime"]?.jsonPrimitive?.contentOrNull
+                    ?: quotaInfo["resetTime"]?.jsonPrimitive?.contentOrNull
+                    ?: quotaInfo["quota_reset_time"]?.jsonPrimitive?.contentOrNull
+                    ?: ""
+
+                val isGemini = label.contains("Gemini", ignoreCase = true) || 
+                               label.contains("chat", ignoreCase = true) || 
+                               label.contains("tab_flash", ignoreCase = true)
+                val isNonGemini = label.contains("Claude", ignoreCase = true) || 
+                                  label.contains("Anthropic", ignoreCase = true) || 
+                                  label.contains("GPT", ignoreCase = true)
+
+                if (isGemini) {
+                    if (geminiRemaining == null || remainingFraction < geminiRemaining) {
+                        geminiRemaining = remainingFraction
+                        geminiReset = resetTime
+                    }
+                } else if (isNonGemini) {
+                    if (nonGeminiRemaining == null || remainingFraction < nonGeminiRemaining) {
+                        nonGeminiRemaining = remainingFraction
+                        nonGeminiReset = resetTime
+                    }
+                }
+            }
+
+            if (geminiRemaining != null || nonGeminiRemaining != null) {
+                try {
+                    settingsStore.update { settings ->
+                        settings.copy(
+                            providers = settings.providers.map { provider ->
+                                if (provider.id == providerSetting.id && provider is ProviderSetting.Antigravity) {
+                                    provider.copy(
+                                        geminiQuotaRemaining = ((geminiRemaining ?: 1.0) * 100.0).toInt().coerceIn(0, 100),
+                                        geminiQuotaResetTime = geminiReset ?: "",
+                                        nonGeminiQuotaRemaining = ((nonGeminiRemaining ?: 1.0) * 100.0).toInt().coerceIn(0, 100),
+                                        nonGeminiQuotaResetTime = nonGeminiReset ?: ""
+                                    )
+                                } else {
+                                    provider
+                                }
+                            }
+                        )
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("AntigravityProvider", "Failed to update quota settings", e)
+                }
+            }
 
             val fetchedModels = rawModels.mapNotNull { element ->
                 val m = element.jsonObject

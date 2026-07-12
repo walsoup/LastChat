@@ -1077,6 +1077,48 @@ private fun ColumnScope.ProviderConfigureAntigravity(
                         modifier = Modifier.padding(top = 4.dp)
                     )
                 }
+
+                if (provider.geminiQuotaRemaining >= 0) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Gemini Models Quota: ${provider.geminiQuotaRemaining}% remaining",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                    )
+                    LinearProgressIndicator(
+                        progress = { provider.geminiQuotaRemaining / 100f },
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    )
+                    if (provider.geminiQuotaResetTime.isNotBlank()) {
+                        Text(
+                            text = "Resets at: ${provider.geminiQuotaResetTime}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                }
+
+                if (provider.nonGeminiQuotaRemaining >= 0) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Claude/Non-Gemini Quota: ${provider.nonGeminiQuotaRemaining}% remaining",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                    )
+                    LinearProgressIndicator(
+                        progress = { provider.nonGeminiQuotaRemaining / 100f },
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    )
+                    if (provider.nonGeminiQuotaResetTime.isNotBlank()) {
+                        Text(
+                            text = "Resets at: ${provider.nonGeminiQuotaResetTime}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                }
             }
         }
     }

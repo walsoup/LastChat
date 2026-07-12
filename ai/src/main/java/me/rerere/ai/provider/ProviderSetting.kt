@@ -376,6 +376,10 @@ sealed class ProviderSetting {
         var projectId: String = "",
         var googleSearch: Boolean = false,
         var obscureModels: Boolean = false,
+        var geminiQuotaRemaining: Int = -1,
+        var geminiQuotaResetTime: String = "",
+        var nonGeminiQuotaRemaining: Int = -1,
+        var nonGeminiQuotaResetTime: String = "",
     ) : ProviderSetting() {
         override fun addModel(model: Model): ProviderSetting = copy(models = models + model)
         override fun editModel(model: Model): ProviderSetting = copy(models = models.map { if (it.id == model.id) model.copy() else it })
@@ -409,7 +413,11 @@ sealed class ProviderSetting {
             email = this.email,
             projectId = this.projectId,
             googleSearch = this.googleSearch,
-            obscureModels = this.obscureModels
+            obscureModels = this.obscureModels,
+            geminiQuotaRemaining = this.geminiQuotaRemaining,
+            geminiQuotaResetTime = this.geminiQuotaResetTime,
+            nonGeminiQuotaRemaining = this.nonGeminiQuotaRemaining,
+            nonGeminiQuotaResetTime = this.nonGeminiQuotaResetTime
         )
 
         fun toOpenAI(): OpenAI {
