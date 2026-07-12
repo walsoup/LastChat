@@ -79,6 +79,7 @@ import me.rerere.rikkahub.ui.pages.imggen.ImageGenPage
 import me.rerere.rikkahub.ui.pages.menu.MenuPage
 import me.rerere.rikkahub.ui.pages.onboarding.OnboardingPage
 import me.rerere.rikkahub.ui.pages.setting.SettingAboutPage
+import me.rerere.rikkahub.ui.pages.setting.SettingLogsPage
 import me.rerere.rikkahub.ui.pages.setting.SettingChatStoragePage
 import me.rerere.rikkahub.ui.pages.setting.SettingDisplayPage
 
@@ -1051,6 +1052,12 @@ class RouteActivity : ComponentActivity() {
                         }
                     }
 
+                    composable<Screen.SettingLogs> {
+                        AdaptiveSettingsScaffold(selected = SettingsDestination.About) {
+                            SettingLogsPage()
+                        }
+                    }
+
                     composable<Screen.SettingChatStorage> {
                         AdaptiveSettingsScaffold(selected = SettingsDestination.ChatStorage) {
                             SettingChatStoragePage()
@@ -1472,4 +1479,7 @@ sealed interface Screen {
 
     @Serializable
     data class WorkspaceTerminal(val id: String) : Screen
+
+    @Serializable
+    data object SettingLogs : Screen
 }

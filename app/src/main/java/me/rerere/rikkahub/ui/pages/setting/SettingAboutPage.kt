@@ -62,6 +62,10 @@ import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.hooks.HapticPattern
 import me.rerere.rikkahub.ui.hooks.rememberPremiumHaptics
 
+import androidx.compose.material.icons.rounded.BugReport
+import me.rerere.rikkahub.ui.context.LocalNavController
+import me.rerere.rikkahub.RouteActivity.Screen
+
 @Composable
 fun SettingAboutPage() {
     val context = LocalContext.current
@@ -160,6 +164,36 @@ fun SettingAboutPage() {
                     onClick = {
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Cocolalilal/LastChat"))
                         context.startActivity(intent)
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Troubleshooting Section
+            Text(
+                text = "Troubleshooting",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(24.dp)),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                val navController = LocalNavController.current
+                AboutItem(
+                    icon = Icons.Rounded.BugReport,
+                    title = "App Logs",
+                    subtitle = "View and filter application logs",
+                    onClick = {
+                        navController.navigate(Screen.SettingLogs)
                     }
                 )
             }
