@@ -305,7 +305,18 @@ class AntigravityProvider(
         }
 
     override suspend fun getBalance(providerSetting: ProviderSetting.Antigravity): String {
-        return "Quota status managed on Google Cloud console."
+        try {
+            getModels(providerSetting, obscure = false)
+        } catch (e: Exception) {
+            // Ignore failure, we'll use whatever was cached
+        }
+        val currentProvider = settingsStore.settingsFlow.value.providers
+            .find { it.id == providerSetting.id } as? ProviderSetting.Antigravity
+            ?: providerSetting
+
+        val gemini = if (currentProvider.geminiQuotaRemaining >= 0) "${currentProvider.geminiQuotaRemaining}%" else "?"
+        val claude = if (currentProvider.nonGeminiQuotaRemaining >= 0) "${currentProvider.nonGeminiQuotaRemaining}%" else "?"
+        return "Gemini: $gemini | Claude: $claude"
     }
 
     override suspend fun generateText(
