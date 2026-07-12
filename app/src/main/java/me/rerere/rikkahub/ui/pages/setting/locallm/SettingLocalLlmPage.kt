@@ -70,11 +70,13 @@ import me.rerere.locallm.LocalModelConfig
 import me.rerere.locallm.LocalModelKind
 import me.rerere.locallm.LocalModelMetadata
 import me.rerere.locallm.LocalRuntimeState
+import me.rerere.asr.local.InstalledSherpaModel
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.models.inferFamilyEntry
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
 import me.rerere.rikkahub.ui.components.ui.AutoAIIconWithUrl
+import me.rerere.rikkahub.ui.components.ui.DebouncedTextField
 import me.rerere.rikkahub.ui.components.ui.HapticSwitch
 import me.rerere.rikkahub.ui.components.ui.ItemPosition
 import me.rerere.rikkahub.ui.components.ui.PhysicsSwipeToDelete
@@ -84,18 +86,30 @@ import me.rerere.rikkahub.ui.components.ui.ToastType
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.hooks.HapticPattern
 import me.rerere.rikkahub.ui.hooks.rememberPremiumHaptics
+import me.rerere.rikkahub.ui.pages.setting.localstt.SettingLocalSttViewModel
+import me.rerere.rikkahub.ui.pages.setting.localstt.SherpaDownloadableModelCard
+import me.rerere.rikkahub.ui.pages.setting.localstt.SherpaInstalledModelCard
+import me.rerere.rikkahub.ui.pages.setting.localstt.SherpaModelConfigDialog
 import me.rerere.rikkahub.ui.theme.AppShapes
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
 @Composable
-fun SettingLocalLlmPage(vm: SettingLocalLlmViewModel = koinViewModel()) {
+fun SettingLocalLlmPage(
+    vm: SettingLocalLlmViewModel = koinViewModel(),
+    sttVm: SettingLocalSttViewModel = koinViewModel(),
+    navigationIcon: @Composable () -> Unit = { BackButton() },
+    setupBottomBar: @Composable (LocalLlmUiState) -> Unit = {},
+) {
     val state by vm.uiState.collectAsStateWithLifecycle()
+    val sttState by sttVm.uiState.collectAsStateWithLifecycle()
     val catalogSnapshot by vm.catalogSnapshot.collectAsStateWithLifecycle()
     val haptics = rememberPremiumHaptics()
     var editingModel by remember { mutableStateOf<InstalledLocalModel?>(null) }
     var modelPendingDelete by remember { mutableStateOf<InstalledLocalModel?>(null) }
+    var editingSherpaModel by remember { mutableStateOf<InstalledSherpaModel?>(null) }
+    var sherpaModelPendingDelete by remember { mutableStateOf<InstalledSherpaModel?>(null) }
     val huggingFaceToken by vm.huggingFaceToken.collectAsStateWithLifecycle()
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -119,7 +133,7 @@ fun SettingLocalLlmPage(vm: SettingLocalLlmViewModel = koinViewModel()) {
     Scaffold(
         topBar = {
             TopAppBar(
-                navigationIcon = { BackButton() },
+                navigationIcon = navigationIcon,
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(
@@ -127,11 +141,12 @@ fun SettingLocalLlmPage(vm: SettingLocalLlmViewModel = koinViewModel()) {
                             contentDescription = null,
                             modifier = Modifier.size(22.dp),
                         )
-                        Text(stringResource(R.string.local_llm_litert_name))
+                        Text("Local models")
                     }
                 },
             )
         },
+        bottomBar = { setupBottomBar(state) },
         floatingActionButton = {
             ImportModelFab(onInstallUrl = { url ->
                 vm.installFromUrl(url)
@@ -169,7 +184,7 @@ fun SettingLocalLlmPage(vm: SettingLocalLlmViewModel = koinViewModel()) {
             if (state.installed.isNotEmpty()) {
                 item { 
                     Spacer(Modifier.height(8.dp))
-                    SectionHeader(stringResource(R.string.local_llm_manage_files_title)) 
+                    SectionHeader("Language and embedding models")
                 }
                 itemsIndexed(state.installed, key = { _, it -> it.id }) { index, model ->
                     val position = when {
@@ -240,7 +255,7 @@ fun SettingLocalLlmPage(vm: SettingLocalLlmViewModel = koinViewModel()) {
                         }
                     }
                 }
-            } else if (state.runtime is LocalRuntimeState.Idle) {
+            } else if (state.runtime is LocalRuntimeState.Idle && sttState.installed.isEmpty()) {
                 item {
                     Column(
                         modifier = Modifier
@@ -278,7 +293,7 @@ fun SettingLocalLlmPage(vm: SettingLocalLlmViewModel = koinViewModel()) {
 
             item { 
                 Spacer(Modifier.height(8.dp))
-                SectionHeader(stringResource(R.string.local_llm_catalog_title)) 
+                SectionHeader("Download language and embedding models")
             }
             itemsIndexed(state.downloadable, key = { _, it -> it.id }) { index, meta ->
                 val shape = when {
@@ -309,6 +324,47 @@ fun SettingLocalLlmPage(vm: SettingLocalLlmViewModel = koinViewModel()) {
 
             item {
                 Spacer(Modifier.height(16.dp))
+                SectionHeader("Speech recognition models (sherpa-onnx)")
+                Text(
+                    "These models run speech-to-text fully on-device. Audio is not uploaded.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                )
+            }
+            items(sttState.installed, key = { "sherpa-installed-${it.id}" }) { model ->
+                SherpaInstalledModelCard(
+                    model = model,
+                    selected = sttState.selectedModelId == model.id,
+                    onSelect = {
+                        haptics.perform(HapticPattern.Selection)
+                        sttVm.select(model)
+                    },
+                    onSettings = { editingSherpaModel = model },
+                    onDelete = { sherpaModelPendingDelete = model },
+                )
+            }
+            if (sttState.downloadable.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    SectionHeader("Download speech recognition models")
+                }
+                items(sttState.downloadable, key = { "sherpa-download-${it.id}" }) { model ->
+                    SherpaDownloadableModelCard(
+                        model = model,
+                        download = sttState.downloads[model.id],
+                        onDownload = {
+                            haptics.perform(HapticPattern.Pop)
+                            sttVm.download(model)
+                        },
+                        onCancel = { sttVm.cancelDownload(model.id) },
+                        onDismissError = { sttVm.dismissDownloadError(model.id) },
+                    )
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(16.dp))
                 SectionHeader("HuggingFace Configuration")
                 Card(
                     shape = AppShapes.CardMedium,
@@ -324,14 +380,15 @@ fun SettingLocalLlmPage(vm: SettingLocalLlmViewModel = koinViewModel()) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        OutlinedTextField(
+                        DebouncedTextField(
                             value = huggingFaceToken,
-                            onValueChange = { vm.updateHuggingFaceToken(it) },
-                            label = { Text("HuggingFace Token") },
-                            placeholder = { Text("hf_...") },
+                            onValueChange = { vm.updateHuggingFaceToken(it.trim()) },
+                            stateKey = "hugging_face_token",
+                            label = "HuggingFace Token",
+                            placeholder = "hf_...",
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            shape = AppShapes.InputField,
+                            isSecure = true,
                         )
                     }
                 }
@@ -371,6 +428,36 @@ fun SettingLocalLlmPage(vm: SettingLocalLlmViewModel = koinViewModel()) {
             },
             dismissButton = {
                 TextButton(onClick = { modelPendingDelete = null }) { Text(stringResource(R.string.cancel)) }
+            },
+        )
+    }
+
+    editingSherpaModel?.let { model ->
+        val live = sttState.installed.firstOrNull { it.id == model.id } ?: model
+        SherpaModelConfigDialog(
+            model = live,
+            onDismiss = { editingSherpaModel = null },
+            onSave = {
+                sttVm.updateConfig(live.id, it)
+                editingSherpaModel = null
+            },
+        )
+    }
+
+    sherpaModelPendingDelete?.let { model ->
+        AlertDialog(
+            onDismissRequest = { sherpaModelPendingDelete = null },
+            title = { Text("Delete ${model.displayName}?") },
+            text = { Text("The downloaded speech model files will be removed from this device.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    haptics.perform(HapticPattern.Thud)
+                    sttVm.delete(model)
+                    sherpaModelPendingDelete = null
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { sherpaModelPendingDelete = null }) { Text("Cancel") }
             },
         )
     }

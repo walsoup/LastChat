@@ -10,10 +10,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,10 +30,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Refresh
 import me.rerere.rikkahub.ui.components.ui.ToastType
 import kotlinx.coroutines.launch
-import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.codex.CodexAccount
@@ -42,6 +44,9 @@ import me.rerere.rikkahub.data.codex.CodexOAuthStatus
 import me.rerere.rikkahub.data.codex.CodexTokenStatus
 import me.rerere.rikkahub.data.codex.CodexUsageWindow
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.ui.hooks.HapticPattern
+import me.rerere.rikkahub.ui.hooks.rememberPremiumHaptics
+import me.rerere.rikkahub.ui.theme.AppShapes
 import org.koin.compose.koinInject
 import java.time.Instant
 import java.time.ZoneId
@@ -51,26 +56,22 @@ import kotlin.math.roundToInt
 @Composable
 fun CodexProviderConfigure(
     provider: ProviderSetting.Codex,
+    showSavingIndicator: Boolean = false,
     onEdit: (ProviderSetting.Codex) -> Unit,
 ) {
     val repository = koinInject<CodexAccountRepository>()
     val oauthManager = koinInject<CodexOAuthManager>()
-    val providerManager = koinInject<ProviderManager>()
     val accounts by repository.accounts.collectAsStateWithLifecycle()
     val oauthStatus by oauthManager.status.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val context = LocalContext.current
-    val canEnable = accounts.any { it.enabled && it.tokenStatus != CodexTokenStatus.INVALID }
+    val account = accounts.singleOrNull()
+    val canEnable = account != null && account.tokenStatus != CodexTokenStatus.INVALID
 
     LaunchedEffect(oauthStatus) {
         when (val status = oauthStatus) {
             is CodexOAuthStatus.Success -> {
-                runCatching {
-                    providerManager.getProviderByType(provider).listModels(provider)
-                }.onSuccess { models ->
-                    onEdit(provider.copy(models = mergeCodexModels(provider.models, models)))
-                }
                 toaster.show(
                     context.getString(R.string.codex_oauth_success),
                     type = ToastType.Success,
@@ -93,70 +94,35 @@ fun CodexProviderConfigure(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        ProviderConfigure(
+            provider = provider,
+            modifier = Modifier.fillMaxWidth(),
+            showSavingIndicator = showSavingIndicator,
+            showProviderTypeSelector = false,
+            enabledToggleEnabled = provider.enabled || canEnable,
+            enabledSupportingText = if (canEnable) null else {
+                stringResource(R.string.codex_sign_in_required)
+            },
+            onEdit = { updated -> onEdit(updated as ProviderSetting.Codex) },
+        )
+
+        HorizontalDivider()
+
         Text(
             text = stringResource(R.string.codex_provider_description),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Button(
-            onClick = oauthManager::startLogin,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.codex_sign_in))
-        }
+        Text(
+            text = stringResource(R.string.codex_account_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    stringResource(R.string.codex_enable),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    text = if (canEnable) {
-                        stringResource(R.string.codex_round_robin_description)
-                    } else {
-                        stringResource(R.string.codex_sign_in_required)
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(
-                checked = provider.enabled,
-                onCheckedChange = { onEdit(provider.copy(enabled = it)) },
-                enabled = provider.enabled || canEnable,
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(R.string.codex_accounts_count, accounts.size),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        repository.refreshAll()
-                    }
-                },
-                enabled = accounts.isNotEmpty(),
-            ) {
-                Text(stringResource(R.string.codex_check_status))
-            }
-        }
-
-        if (accounts.isEmpty()) {
+        if (account == null) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
+                shape = AppShapes.CardMedium,
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceContainer,
                 ),
@@ -167,65 +133,66 @@ fun CodexProviderConfigure(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        } else {
-            accounts.forEach { account ->
-                CodexAccountCard(
-                    account = account,
-                    onEnabledChange = { enabled ->
-                        scope.launch { repository.setEnabled(account.id, enabled) }
-                    },
-                    onRefresh = {
-                        scope.launch {
-                            runCatching { repository.refreshAccount(account.id) }
-                                .onFailure {
-                                    toaster.show(
-                                        it.message ?: context.getString(
-                                            R.string.codex_refresh_failed
-                                        ),
-                                        type = ToastType.Error,
-                                    )
-                                }
-                        }
-                    },
-                    onReauthenticate = oauthManager::startLogin,
-                    onDelete = {
-                        scope.launch {
-                            repository.delete(account.id)
-                            if (repository.accounts.value.isEmpty() && provider.enabled) {
-                                onEdit(provider.copy(enabled = false))
-                            }
-                        }
-                    },
-                )
+
+            Button(
+                onClick = oauthManager::startLogin,
+                modifier = Modifier.fillMaxWidth(),
+                shape = AppShapes.ButtonPill,
+            ) {
+                Text(stringResource(R.string.codex_sign_in))
             }
+        } else {
+            CodexAccountCard(
+                account = account,
+                onRefresh = {
+                    scope.launch {
+                        runCatching { repository.refreshAccount(account.id) }
+                            .onFailure {
+                                toaster.show(
+                                    it.message ?: context.getString(
+                                        R.string.codex_refresh_failed
+                                    ),
+                                    type = ToastType.Error,
+                                )
+                            }
+                    }
+                },
+                onReauthenticate = oauthManager::startLogin,
+                onDelete = {
+                    scope.launch {
+                        repository.delete(account.id)
+                        if (provider.enabled) {
+                            onEdit(provider.copy(enabled = false))
+                        }
+                    }
+                },
+            )
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = AppShapes.CardMedium,
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ) {
+            Text(
+                text = stringResource(R.string.codex_access_disclaimer),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(14.dp),
+            )
         }
     }
-}
-
-internal fun mergeCodexModels(existing: List<Model>, refreshed: List<Model>): List<Model> {
-    val refreshedByModelId = refreshed.associateBy(Model::modelId)
-    val merged = existing.map { model ->
-        refreshedByModelId[model.modelId]?.let { refreshedModel ->
-            model.copy(
-                inputModalities = refreshedModel.inputModalities,
-                outputModalities = refreshedModel.outputModalities,
-                abilities = refreshedModel.abilities,
-            )
-        } ?: model
-    }
-    val existingModelIds = existing.mapTo(mutableSetOf(), Model::modelId)
-    return merged + refreshed.filterNot { it.modelId in existingModelIds }
 }
 
 @Composable
 private fun CodexAccountCard(
     account: CodexAccount,
-    onEnabledChange: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onReauthenticate: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var showDeleteConfirmation by remember { mutableStateOf(false) }
+    val haptics = rememberPremiumHaptics()
 
     if (showDeleteConfirmation) {
         AlertDialog(
@@ -255,6 +222,7 @@ private fun CodexAccountCard(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = AppShapes.CardMedium,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         ),
@@ -263,25 +231,15 @@ private fun CodexAccountCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(account.name, style = MaterialTheme.typography.titleMedium)
-                    if (account.email.isNotBlank()) {
-                        Text(
-                            account.email,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(account.name, style = MaterialTheme.typography.titleMedium)
+                if (account.email.isNotBlank()) {
+                    Text(
+                        account.email,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                Switch(
-                    checked = account.enabled,
-                    onCheckedChange = onEnabledChange,
-                )
             }
 
             Text(
@@ -315,18 +273,38 @@ private fun CodexAccountCard(
             HorizontalDivider()
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onRefresh) {
-                    Text(stringResource(R.string.codex_refresh))
-                }
-                TextButton(onClick = onReauthenticate) {
+                TextButton(
+                    onClick = {
+                        haptics.perform(HapticPattern.Pop)
+                        onReauthenticate()
+                    },
+                ) {
                     Text(stringResource(R.string.codex_reauthenticate))
                 }
-                TextButton(onClick = { showDeleteConfirmation = true }) {
-                    Text(
-                        stringResource(R.string.delete),
-                        color = MaterialTheme.colorScheme.error,
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.weight(1f))
+                IconButton(
+                    onClick = {
+                        haptics.perform(HapticPattern.Pop)
+                        onRefresh()
+                    },
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Refresh,
+                        contentDescription = stringResource(R.string.codex_check_status),
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        haptics.perform(HapticPattern.Pop)
+                        showDeleteConfirmation = true
+                    },
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Delete,
+                        contentDescription = stringResource(R.string.codex_remove),
+                        tint = MaterialTheme.colorScheme.error,
                     )
                 }
             }
