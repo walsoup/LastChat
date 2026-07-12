@@ -43,6 +43,7 @@ interface SearchService<T : SearchServiceOptions> {
                 is SearchServiceOptions.BochaOptions -> BochaSearchService
                 is SearchServiceOptions.NanoGPTOptions -> NanoGPTSearchService
                 is SearchServiceOptions.GrokOptions -> GrokSearchService
+                is SearchServiceOptions.AiStudioOptions -> AiStudioSearchService
             } as SearchService<T>
         }
 

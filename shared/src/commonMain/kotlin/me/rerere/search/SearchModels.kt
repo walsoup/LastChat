@@ -64,6 +64,7 @@ sealed class SearchServiceOptions {
             BochaOptions::class to "博查",
             NanoGPTOptions::class to "NanoGPT",
             GrokOptions::class to "Grok",
+            AiStudioOptions::class to "Google AI Studio",
         )
     }
 
@@ -182,5 +183,13 @@ sealed class SearchServiceOptions {
         override val id: Uuid = Uuid.random(),
         val apiKey: String = "",
         val model: String = "grok-4-1212"
+    ) : SearchServiceOptions()
+
+    @Serializable
+    @SerialName("aistudio")
+    data class AiStudioOptions(
+        override val id: Uuid = Uuid.random(),
+        val apiKey: String = "",
+        val model: String = "gemini-2.0-flash"
     ) : SearchServiceOptions()
 }

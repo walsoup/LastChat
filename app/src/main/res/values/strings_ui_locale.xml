@@ -330,6 +330,7 @@
     <string name="setting_search_preset_ollama_desc">Search powered by Ollama</string>
     <string name="setting_search_preset_brave_desc">Privacy-focused web search</string>
     <string name="setting_search_preset_grok_desc">xAI web search with cited answers</string>
+    <string name="setting_search_preset_aistudio_desc">Google Gemini web search with grounding</string>
     <string name="setting_search_preset_nanogpt_desc">AI web search with scraping and stealth mode</string>
     <string name="setting_search_preset_tavily_desc">AI-optimized search with scraping support</string>
     <string name="setting_search_preset_exa_desc">Neural search engine for quality results</string>
@@ -350,6 +351,7 @@
     <string name="search_field_max_tokens_per_page">Max Tokens / Page</string>
     <string name="search_field_model">Model</string>
     <string name="search_grok_model_desc">Use an xAI model that supports web search</string>
+    <string name="search_aistudio_model_desc">Use a Gemini model that supports search grounding (e.g., gemini-2.0-flash)</string>
     <string name="search_field_summary">Summary</string>
     <string name="search_field_summary_desc">Enable summary generation</string>
     <string name="search_field_search_depth">Search Depth</string>

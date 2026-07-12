@@ -161,6 +161,12 @@ val SEARCH_SERVICE_PRESETS = listOf(
         hasScraping = false
     ),
     SearchServicePreset(
+        name = "Google AI Studio",
+        descriptionRes = R.string.setting_search_preset_aistudio_desc,
+        createOptions = { SearchServiceOptions.AiStudioOptions() },
+        hasScraping = false
+    ),
+    SearchServicePreset(
         name = "NanoGPT",
         descriptionRes = R.string.setting_search_preset_nanogpt_desc,
         createOptions = { SearchServiceOptions.NanoGPTOptions() },
@@ -252,6 +258,7 @@ private fun SearchServiceDescription(service: SearchServiceOptions) {
         is SearchServiceOptions.ExaOptions -> apiKeyButton("https://dashboard.exa.ai/api-keys")
         is SearchServiceOptions.FirecrawlOptions -> apiKeyButton("https://docs.firecrawl.dev/features/search")
         is SearchServiceOptions.GrokOptions -> apiKeyButton("https://console.x.ai/")
+        is SearchServiceOptions.AiStudioOptions -> apiKeyButton("https://aistudio.google.com/")
         is SearchServiceOptions.JinaOptions -> apiKeyButton("https://jina.ai/")
         is SearchServiceOptions.LinkUpOptions -> apiKeyButton("https://www.linkup.so/")
         is SearchServiceOptions.NanoGPTOptions -> apiKeyButton("https://nano-gpt.com/api")
@@ -623,6 +630,11 @@ containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceCon
                                     currentService = it
                                 }
                             }
+                            is SearchServiceOptions.AiStudioOptions -> {
+                                AiStudioOptions(currentService as SearchServiceOptions.AiStudioOptions) {
+                                    currentService = it
+                                }
+                            }
                             is SearchServiceOptions.BingLocalOptions -> {
                                 // No configuration needed for Bing
                                 Text(
@@ -948,6 +960,7 @@ private fun SearchServiceEditorSheet(
                         is SearchServiceOptions.OllamaOptions -> OllamaOptions(currentService as SearchServiceOptions.OllamaOptions) { currentService = it }
                         is SearchServiceOptions.PerplexityOptions -> PerplexityOptions(currentService as SearchServiceOptions.PerplexityOptions) { currentService = it }
                         is SearchServiceOptions.GrokOptions -> GrokOptions(currentService as SearchServiceOptions.GrokOptions) { currentService = it }
+                        is SearchServiceOptions.AiStudioOptions -> AiStudioOptions(currentService as SearchServiceOptions.AiStudioOptions) { currentService = it }
                         is SearchServiceOptions.BingLocalOptions -> Text(
                             text = stringResource(R.string.setting_search_bing_no_config),
                             style = MaterialTheme.typography.bodyMedium,
@@ -1756,6 +1769,53 @@ private fun GrokOptions(
         },
         description = {
             Text(stringResource(R.string.search_grok_model_desc))
+        }
+    ) {
+        OutlinedTextField(
+            value = options.model,
+            onValueChange = {
+                onUpdateOptions(
+                    options.copy(
+                        model = it
+                    )
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = me.rerere.rikkahub.ui.theme.AppShapes.InputField,
+        )
+    }
+}
+
+@Composable
+private fun AiStudioOptions(
+    options: SearchServiceOptions.AiStudioOptions,
+    onUpdateOptions: (SearchServiceOptions.AiStudioOptions) -> Unit
+) {
+    FormItem(
+        label = {
+            Text(stringResource(R.string.search_field_api_key))
+        }
+    ) {
+        OutlinedTextField(
+            value = options.apiKey,
+            onValueChange = {
+                onUpdateOptions(
+                    options.copy(
+                        apiKey = it
+                    )
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = me.rerere.rikkahub.ui.theme.AppShapes.InputField,
+        )
+    }
+
+    FormItem(
+        label = {
+            Text(stringResource(R.string.search_field_model))
+        },
+        description = {
+            Text(stringResource(R.string.search_aistudio_model_desc))
         }
     ) {
         OutlinedTextField(
