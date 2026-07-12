@@ -115,20 +115,18 @@ class AntigravityProvider(
     }
 
     private fun getFallbackModels(obscure: Boolean): List<Model> {
-        val list = listOf(
-            "antigravity-auto" to "Antigravity Auto",
-            "gemini-2.5-flash" to "Gemini 2.5 Flash",
-            "gemini-2.5-flash-lite" to "Gemini 2.5 Flash Lite",
-            "gemini-2.5-pro" to "Gemini 2.5 Pro",
-            "gemini-3-flash" to "Gemini 3 Flash",
-            "gemini-3-flash-agent" to "Gemini 3 Flash Agent",
-            "gemini-3.1-pro" to "Gemini 3.1 Pro",
-            "gemini-3.5-flash" to "Gemini 3.5 Flash",
-            "gemini-3.5-flash-high" to "Gemini 3.5 Flash (High)",
-            "gemini-pro-agent" to "Gemini Pro Agent",
-            "claude-opus-4-6-thinking" to "Claude 3 Opus (Thinking)"
+        val defaultModels = listOf(
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-low",
+            "gemini-3.5-flash-extra-low",
+            "gemini-3.1-pro",
+            "gemini-3.1-pro-low",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "claude-sonnet-4-6-thinking",
+            "claude-opus-4-6-thinking"
         )
-        return list.map { (id, name) ->
+        return defaultModels.map { id ->
             val isThinking = id.contains("thinking", ignoreCase = true)
             val abilities = buildList {
                 add(ModelAbility.TOOL)
@@ -138,7 +136,7 @@ class AntigravityProvider(
             }
             Model(
                 modelId = id,
-                displayName = if (obscure) id else name,
+                displayName = if (obscure) id else id.replace("-", " ").uppercase(),
                 inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
                 outputModalities = listOf(Modality.TEXT),
                 abilities = abilities
@@ -165,17 +163,25 @@ class AntigravityProvider(
                 put("project", providerSetting.projectId)
             }
 
+            val baseUrlClean = providerSetting.baseUrl.removeSuffix("/")
+            val baseDomain = if (baseUrlClean.contains("/v1internal:streamGenerateContent")) {
+                baseUrlClean.substringBefore("/v1internal:streamGenerateContent")
+            } else {
+                baseUrlClean
+            }
+            val fetchUrl = "$baseDomain/v1internal:fetchAvailableModels"
+
             val response = try {
                 client.newCall(
                     Request.Builder()
-                        .url("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")
+                        .url(fetchUrl)
                         .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
                         .addHeader("Authorization", "Bearer $accessToken")
                         .addHeader("x-goog-api-client", fingerprint.apiClient)
                         .addHeader("x-goog-quotauser", fingerprint.quotaUser)
                         .addHeader("x-client-device-id", fingerprint.deviceId)
                         .addHeader("client-metadata", fingerprint.clientMetadataJson)
-                        .addHeader("User-Agent", "antigravity")
+                        .addHeader("User-Agent", AntigravityOAuthManager.USER_AGENT)
                         .addHeader("Content-Type", "application/json")
                         .build()
                 ).await()
@@ -191,8 +197,8 @@ class AntigravityProvider(
             }
 
             val jsonEl = json.parseToJsonElement(body).jsonObject
-            val rawModels = jsonEl["availableModels"]?.jsonArray
-                ?: jsonEl["models"]?.jsonArray
+            val rawModels = jsonEl["availableModels"]?.jsonObject
+                ?: jsonEl["models"]?.jsonObject
                 ?: run {
                     android.util.Log.w("AntigravityProvider", "No availableModels/models in response: $body")
                     return@withContext getFallbackModels(obscure)
@@ -203,12 +209,12 @@ class AntigravityProvider(
             var nonGeminiRemaining: Double? = null
             var nonGeminiReset: String? = null
 
-            for (element in rawModels) {
+            for ((modelName, element) in rawModels.entries) {
                 val m = element.jsonObject
                 val label = m["displayMetadata"]?.jsonObject?.get("label")?.jsonPrimitive?.contentOrNull
                     ?: m["displayName"]?.jsonPrimitive?.contentOrNull
                     ?: m["model"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
-                    ?: ""
+                    ?: modelName
 
                 val quotaInfo = m["quotaInfo"]?.jsonObject ?: continue
                 val remainingFraction = quotaInfo["remainingFraction"]?.jsonPrimitive?.doubleOrNull ?: 1.0
@@ -260,9 +266,9 @@ class AntigravityProvider(
                 }
             }
 
-            val fetchedModels = rawModels.mapNotNull { element ->
+            val fetchedModels = rawModels.entries.mapNotNull { (modelName, element) ->
                 val m = element.jsonObject
-                val name = m["model"]?.jsonObject?.get("name")?.jsonPrimitive?.content ?: ""
+                val name = m["model"]?.jsonObject?.get("name")?.jsonPrimitive?.content ?: modelName
                 if (name.isBlank()) return@mapNotNull null
 
                 val modelId = name.replace("models/", "")
@@ -753,6 +759,7 @@ class AntigravityProvider(
         val modelLower = rawModel.lowercase()
 
         val tier = when {
+            modelLower.endsWith("-extra-low") -> "extra-low"
             modelLower.endsWith("-low") -> "low"
             modelLower.endsWith("-medium") -> "medium"
             modelLower.endsWith("-high") -> "high"
@@ -783,6 +790,7 @@ class AntigravityProvider(
         val adaptiveTier = when {
             thinkingBudget > 16000 -> "high"
             thinkingBudget > 8192 -> "medium"
+            tier != null -> tier
             else -> "low"
         }
 
@@ -798,12 +806,14 @@ class AntigravityProvider(
             baseModel.contains("gemini-3.5-flash") -> {
                 if (adaptiveTier == "xhigh" || adaptiveTier == "high") {
                     "gemini-3-flash-agent"
+                } else if (adaptiveTier == "extra-low") {
+                    "gemini-3.5-flash-extra-low"
                 } else {
                     "gemini-3.5-flash-low"
                 }
             }
             baseModel.contains("gemini-3-flash") -> "gemini-3-flash"
-            else -> baseModel
+            else -> modelLower
         }
 
         return googleModel
