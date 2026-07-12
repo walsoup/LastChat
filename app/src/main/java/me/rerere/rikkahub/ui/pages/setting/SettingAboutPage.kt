@@ -64,7 +64,7 @@ import me.rerere.rikkahub.ui.hooks.rememberPremiumHaptics
 
 import androidx.compose.material.icons.rounded.BugReport
 import me.rerere.rikkahub.ui.context.LocalNavController
-import me.rerere.rikkahub.RouteActivity.Screen
+import me.rerere.rikkahub.Screen
 
 @Composable
 fun SettingAboutPage() {
