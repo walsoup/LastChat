@@ -306,7 +306,7 @@ class AntigravityProvider(
 
     override suspend fun getBalance(providerSetting: ProviderSetting.Antigravity): String {
         try {
-            getModels(providerSetting, obscure = false)
+            listModels(providerSetting)
         } catch (e: Exception) {
             // Ignore failure, we'll use whatever was cached
         }
