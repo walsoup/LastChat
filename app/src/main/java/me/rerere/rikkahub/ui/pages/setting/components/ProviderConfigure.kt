@@ -1079,7 +1079,7 @@ private fun ColumnScope.ProviderConfigureAntigravity(
                 }
 
                 if (provider.geminiQuotaRemaining >= 0) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.size(8.dp))
                     Text(
                         text = "Gemini Models Quota: ${provider.geminiQuotaRemaining}% remaining",
                         style = MaterialTheme.typography.bodySmall,
@@ -1100,7 +1100,7 @@ private fun ColumnScope.ProviderConfigureAntigravity(
                 }
 
                 if (provider.nonGeminiQuotaRemaining >= 0) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.size(8.dp))
                     Text(
                         text = "Claude/Non-Gemini Quota: ${provider.nonGeminiQuotaRemaining}% remaining",
                         style = MaterialTheme.typography.bodySmall,
