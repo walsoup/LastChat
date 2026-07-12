@@ -1009,6 +1009,27 @@ private fun ColumnScope.ProviderConfigureAntigravity(
         }
     }
 
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer
+        ),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "⚠️ Warning: Internal Google API",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+            )
+            Text(
+                text = "This provider uses an internal Google API not intended for third-party use. Your Google account may be rate-limited or suspended. This app is not endorsed by or affiliated with Google. Proceed with caution.",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+    }
+
     Text(
         text = "Sign in with your Google account to authenticate and retrieve access tokens for Antigravity.",
         style = MaterialTheme.typography.bodyMedium,
@@ -1042,15 +1063,53 @@ private fun ColumnScope.ProviderConfigureAntigravity(
                         modifier = Modifier.padding(top = 4.dp)
                     )
                 }
+                if (provider.tokenExpiry > 0) {
+                    val timeRemainingMin = (provider.tokenExpiry - System.currentTimeMillis()) / 60_000
+                    val expiryText = if (timeRemainingMin > 0) {
+                        "Token expires in: $timeRemainingMin min"
+                    } else {
+                        "Token expired"
+                    }
+                    Text(
+                        text = expiryText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
             }
         }
     }
 
-    Button(
-        onClick = { oauthManager.startLogin(provider.id) },
+    Row(
         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(if (provider.email.isBlank()) "Sign In with Google" else "Re-authenticate")
+        Button(
+            onClick = { oauthManager.startLogin(provider.id) },
+            modifier = Modifier.weight(1f),
+        ) {
+            Text(if (provider.email.isBlank()) "Sign In with Google" else "Re-authenticate")
+        }
+
+        if (provider.email.isNotBlank()) {
+            OutlinedButton(
+                onClick = {
+                    onEdit(
+                        provider.copy(
+                            accessToken = "",
+                            refreshToken = "",
+                            tokenExpiry = 0,
+                            email = "",
+                            projectId = ""
+                        )
+                    )
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Sign Out")
+            }
+        }
     }
 
     DebouncedTextField(
