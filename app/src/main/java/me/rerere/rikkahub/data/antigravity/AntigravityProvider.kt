@@ -165,7 +165,7 @@ class AntigravityProvider(
             val response = try {
                 client.newCall(
                     Request.Builder()
-                        .url("https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")
+                        .url("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")
                         .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
                         .addHeader("Authorization", "Bearer $accessToken")
                         .addHeader("x-goog-api-client", fingerprint.apiClient)

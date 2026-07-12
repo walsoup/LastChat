@@ -326,7 +326,7 @@ class AntigravityOAuthManager(
             try {
                 val response = client.newCall(
                     Request.Builder()
-                        .url("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
+                        .url("https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
                         .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                         .addHeader("Authorization", "Bearer $accessToken")
                         .addHeader("x-goog-api-client", fingerprint.apiClient)
