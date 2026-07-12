@@ -685,8 +685,9 @@ class AntigravityProvider(
                 }
             }
 
+            val payloadStr = json.encodeToString(finalPayload)
             val request = requestBuilder
-                .post(json.encodeToString(finalPayload).toRequestBody("application/json".toMediaType()))
+                .post(payloadStr.toRequestBody("application/json".toMediaType()))
                 .build()
 
             val result = kotlinx.coroutines.suspendCancellableCoroutine<ResultOfRequest> { continuation ->
@@ -873,7 +874,7 @@ class AntigravityProvider(
                         if (!opened && continuation.isActive) {
                             continuation.resume(ResultOfRequest.Failure(response?.code ?: 500, detail, t))
                         } else {
-                            val msg = "Antigravity Stream Error: ${response?.code} - $detail"
+                            val msg = "Antigravity Stream Error: ${response?.code} - $detail, Payload: $payloadStr"
                             close(Exception(msg, t))
                         }
                     }
@@ -891,7 +892,7 @@ class AntigravityProvider(
                 success = true
                 break
             } else if (result is ResultOfRequest.Failure) {
-                lastErrorMsg = "URL: $finalUrl, Code: ${result.code}, Detail: ${result.detail}, Error: ${result.t?.message}"
+                lastErrorMsg = "URL: $finalUrl, Code: ${result.code}, Detail: ${result.detail}, Payload: $payloadStr, Error: ${result.t?.message}"
                 android.util.Log.w("AntigravityProvider", "Endpoint failed: $lastErrorMsg")
             }
         }
