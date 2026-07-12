@@ -370,20 +370,19 @@ class AntigravityOAuthManager(
         val apiClient = "google-cloud-sdk vscode/1.96.0"
         val osVersion = listOf("14.5", "15.0", "15.1", "15.2").random()
 
-        val clientMetadata = buildJsonObject {
-            put("ideType", "VSCODE")
-            put("platform", "MACOS")
-            put("pluginType", "GEMINI")
-            put("osVersion", osVersion)
-            put("arch", "arm64")
-            put("sqmId", java.util.UUID.randomUUID().toString())
-        }
+        val clientMetadataJson = listOf(
+            "ideType=VSCODE",
+            "platform=MACOS",
+            "pluginType=GEMINI",
+            "osVersion=$osVersion",
+            "arch=arm64"
+        ).joinToString(",")
 
         return DeviceFingerprint(
             apiClient = apiClient,
             quotaUser = quotaUser,
             deviceId = deviceId,
-            clientMetadataJson = clientMetadata.toString()
+            clientMetadataJson = clientMetadataJson
         )
     }
 
