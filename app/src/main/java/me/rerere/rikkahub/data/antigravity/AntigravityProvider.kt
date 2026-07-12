@@ -113,17 +113,48 @@ class AntigravityProvider(
         return response.accessToken
     }
 
+    private fun getFallbackModels(obscure: Boolean): List<Model> {
+        val list = listOf(
+            "gemini-3.5-flash-low" to "Gemini 3.5 Flash (Low)",
+            "gemini-3.5-flash-medium" to "Gemini 3.5 Flash (Medium)",
+            "gemini-3.5-flash-high" to "Gemini 3.5 Flash (High)",
+            "gemini-3.1-pro-low" to "Gemini 3.1 Pro (Low)",
+            "gemini-3.1-pro-medium" to "Gemini 3.1 Pro (Medium)",
+            "gemini-3.1-pro-high" to "Gemini 3.1 Pro (High)",
+            "claude-sonnet-4-6" to "Claude 3.7 Sonnet (Default)",
+            "claude-sonnet-4-6-thinking" to "Claude 3.7 Sonnet (Thinking)",
+            "claude-opus-4-6" to "Claude 3 Opus"
+        )
+        return list.map { (id, name) ->
+            val isThinking = id.contains("thinking", ignoreCase = true)
+            val abilities = buildList {
+                add(ModelAbility.TOOL)
+                if (isThinking) {
+                    add(ModelAbility.REASONING)
+                }
+            }
+            Model(
+                modelId = id,
+                displayName = if (obscure) id else name,
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                outputModalities = listOf(Modality.TEXT),
+                abilities = abilities
+            )
+        }
+    }
+
     override suspend fun listModels(providerSetting: ProviderSetting.Antigravity): List<Model> =
         withContext(Dispatchers.IO) {
+            val obscure = providerSetting.obscureModels
             val accessToken = try {
                 getOrRefreshAccessToken(providerSetting)
             } catch (e: Exception) {
                 android.util.Log.e("AntigravityProvider", "Failed to get access token for model list", e)
-                return@withContext emptyList()
+                return@withContext getFallbackModels(obscure)
             }
 
             if (providerSetting.projectId.isBlank()) {
-                return@withContext emptyList()
+                return@withContext getFallbackModels(obscure)
             }
 
             val fingerprint = oauthManager.generateFingerprint(providerSetting.email)
@@ -131,24 +162,29 @@ class AntigravityProvider(
                 put("project", providerSetting.projectId)
             }
 
-            val response = client.newCall(
-                Request.Builder()
-                    .url("https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")
-                    .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-                    .addHeader("Authorization", "Bearer $accessToken")
-                    .addHeader("x-goog-api-client", fingerprint.apiClient)
-                    .addHeader("x-goog-quotauser", fingerprint.quotaUser)
-                    .addHeader("x-client-device-id", fingerprint.deviceId)
-                    .addHeader("client-metadata", fingerprint.clientMetadataJson)
-                    .addHeader("User-Agent", "antigravity")
-                    .addHeader("Content-Type", "application/json")
-                    .build()
-            ).await()
+            val response = try {
+                client.newCall(
+                    Request.Builder()
+                        .url("https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")
+                        .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
+                        .addHeader("Authorization", "Bearer $accessToken")
+                        .addHeader("x-goog-api-client", fingerprint.apiClient)
+                        .addHeader("x-goog-quotauser", fingerprint.quotaUser)
+                        .addHeader("x-client-device-id", fingerprint.deviceId)
+                        .addHeader("client-metadata", fingerprint.clientMetadataJson)
+                        .addHeader("User-Agent", "antigravity")
+                        .addHeader("Content-Type", "application/json")
+                        .build()
+                ).await()
+            } catch (e: Exception) {
+                android.util.Log.e("AntigravityProvider", "fetchAvailableModels call failed", e)
+                return@withContext getFallbackModels(obscure)
+            }
 
             val body = response.body.string()
             if (!response.isSuccessful) {
                 android.util.Log.e("AntigravityProvider", "fetchAvailableModels failed: ${response.code} $body")
-                return@withContext emptyList()
+                return@withContext getFallbackModels(obscure)
             }
 
             val jsonEl = json.parseToJsonElement(body).jsonObject
@@ -156,12 +192,10 @@ class AntigravityProvider(
                 ?: jsonEl["models"]?.jsonArray
                 ?: run {
                     android.util.Log.w("AntigravityProvider", "No availableModels/models in response: $body")
-                    return@withContext emptyList()
+                    return@withContext getFallbackModels(obscure)
                 }
 
-            val obscure = providerSetting.obscureModels
-
-            rawModels.mapNotNull { element ->
+            val fetchedModels = rawModels.mapNotNull { element ->
                 val m = element.jsonObject
                 val name = m["model"]?.jsonObject?.get("name")?.jsonPrimitive?.content ?: ""
                 if (name.isBlank()) return@mapNotNull null
@@ -190,6 +224,12 @@ class AntigravityProvider(
                     outputModalities = listOf(Modality.TEXT),
                     abilities = abilities
                 )
+            }
+
+            if (fetchedModels.isEmpty()) {
+                getFallbackModels(obscure)
+            } else {
+                fetchedModels
             }
         }
 
@@ -420,8 +460,17 @@ class AntigravityProvider(
         }
 
         val fingerprint = oauthManager.generateFingerprint(providerSetting.email)
+        val baseUrlClean = providerSetting.baseUrl.removeSuffix("/")
+        val finalUrl = if (baseUrlClean.endsWith("/v1internal:streamGenerateContent")) {
+            "$baseUrlClean?alt=sse"
+        } else if (baseUrlClean.endsWith("/v1internal:streamGenerateContent?alt=sse")) {
+            baseUrlClean
+        } else {
+            "$baseUrlClean/v1internal:streamGenerateContent?alt=sse"
+        }
+
         val request = Request.Builder()
-            .url(providerSetting.baseUrl)
+            .url(finalUrl)
             .addHeader("Authorization", "Bearer $accessToken")
             .addHeader("x-goog-api-client", fingerprint.apiClient)
             .addHeader("x-goog-quotauser", fingerprint.quotaUser)

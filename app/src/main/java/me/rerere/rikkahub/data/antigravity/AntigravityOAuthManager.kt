@@ -334,6 +334,7 @@ class AntigravityOAuthManager(
                         .addHeader("x-client-device-id", fingerprint.deviceId)
                         .addHeader("client-metadata", fingerprint.clientMetadataJson)
                         .addHeader("User-Agent", USER_AGENT)
+                        .addHeader("Content-Type", "application/json")
                         .build()
                 ).await()
 

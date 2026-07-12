@@ -1043,6 +1043,14 @@ private fun ColumnScope.ProviderConfigureAntigravity(
         Text(if (provider.email.isBlank()) "Sign In with Google" else "Re-authenticate")
     }
 
+    DebouncedTextField(
+        value = provider.projectId,
+        onValueChange = { onEdit(provider.copy(projectId = it.trim())) },
+        stateKey = "antigravity_project_id_${provider.id}",
+        label = "Google Cloud Project ID",
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+    )
+
     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
     // Toggles
