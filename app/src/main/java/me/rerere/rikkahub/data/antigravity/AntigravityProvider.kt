@@ -269,12 +269,14 @@ class AntigravityProvider(
                                               label.contains("GPT", ignoreCase = true)
 
                             if (isGemini) {
-                                if (geminiRemaining == null || remainingFraction < geminiRemaining) {
+                                val currentGemini = geminiRemaining
+                                if (currentGemini == null || remainingFraction < currentGemini) {
                                     geminiRemaining = remainingFraction
                                     geminiReset = resetTime
                                 }
                             } else if (isNonGemini) {
-                                if (nonGeminiRemaining == null || remainingFraction < nonGeminiRemaining) {
+                                val currentNonGemini = nonGeminiRemaining
+                                if (currentNonGemini == null || remainingFraction < currentNonGemini) {
                                     nonGeminiRemaining = remainingFraction
                                     nonGeminiReset = resetTime
                                 }
