@@ -18,6 +18,49 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install web-ui dependencies
+        working-directory: web-ui
+        run: npm ci || npm install
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager --install "ndk;27.0.12077973" "cmake;3.22.1"
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android,armv7-linux-androideabi
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Antigravity Proxy
+        run: |
+          cd antigravity-proxy-rust
+          mkdir -p ../app/src/main/jniLibs/arm64-v8a
+          mkdir -p ../app/src/main/jniLibs/x86_64
+          mkdir -p ../app/src/main/jniLibs/armeabi-v7a
+          
+          # Build arm64
+          cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
+          mv ../app/src/main/jniLibs/arm64-v8a/antigravity-proxy-rust ../app/src/main/jniLibs/arm64-v8a/libantigravity-proxy.so
+          
+          # Build x86_64
+          cargo ndk -t x86_64 -o ../app/src/main/jniLibs build --release
+          mv ../app/src/main/jniLibs/x86_64/antigravity-proxy-rust ../app/src/main/jniLibs/x86_64/libantigravity-proxy.so
+          
+          # Build armv7
+          cargo ndk -t armeabi-v7a -o ../app/src/main/jniLibs build --release
+          mv ../app/src/main/jniLibs/armeabi-v7a/antigravity-proxy-rust ../app/src/main/jniLibs/armeabi-v7a/libantigravity-proxy.so
+
       - name: Gradle cache
         uses: actions/cache@v4
         with:
