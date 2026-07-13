@@ -53,21 +53,21 @@ jobs:
           RUSTFLAGS: "-A warnings"
         run: |
           cd antigravity-proxy-rust
+          
+          # Compile all targets
+          cargo ndk -t arm64-v8a build --release
+          cargo ndk -t x86_64 build --release
+          cargo ndk -t armeabi-v7a build --release
+          
+          # Create jniLibs dirs
           mkdir -p ../app/src/main/jniLibs/arm64-v8a
           mkdir -p ../app/src/main/jniLibs/x86_64
           mkdir -p ../app/src/main/jniLibs/armeabi-v7a
           
-          # Build arm64
-          cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
-          mv ../app/src/main/jniLibs/arm64-v8a/antigravity-proxy-rust ../app/src/main/jniLibs/arm64-v8a/libantigravity-proxy.so
-          
-          # Build x86_64
-          cargo ndk -t x86_64 -o ../app/src/main/jniLibs build --release
-          mv ../app/src/main/jniLibs/x86_64/antigravity-proxy-rust ../app/src/main/jniLibs/x86_64/libantigravity-proxy.so
-          
-          # Build armv7
-          cargo ndk -t armeabi-v7a -o ../app/src/main/jniLibs build --release
-          mv ../app/src/main/jniLibs/armeabi-v7a/antigravity-proxy-rust ../app/src/main/jniLibs/armeabi-v7a/libantigravity-proxy.so
+          # Copy and rename to .so
+          cp target/aarch64-linux-android/release/antigravity-proxy-rust ../app/src/main/jniLibs/arm64-v8a/libantigravity-proxy.so
+          cp target/x86_64-linux-android/release/antigravity-proxy-rust ../app/src/main/jniLibs/x86_64/libantigravity-proxy.so
+          cp target/armv7-linux-androideabi/release/antigravity-proxy-rust ../app/src/main/jniLibs/armeabi-v7a/libantigravity-proxy.so
 
       - name: Gradle cache
         uses: actions/cache@v4
