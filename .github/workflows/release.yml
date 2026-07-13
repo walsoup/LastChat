@@ -37,8 +37,10 @@ jobs:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: aarch64-linux-android,x86_64-linux-android,armv7-linux-androideabi
           cache: false
+
+      - name: Add Rust Android Targets
+        run: rustup target add aarch64-linux-android x86_64-linux-android armv7-linux-androideabi
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
