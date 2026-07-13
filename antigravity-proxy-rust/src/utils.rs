@@ -801,19 +801,13 @@ pub fn transform_to_google_body(
 
             if !is_cli && !features.sanitize_antigravity_prompts {
                 text = format!("{}\n\n{}", antigravity_system_instruction.trim(), text).trim().to_string();
-                system_instruction = Some(serde_json::json!({
-                    "role": "user",
-                    "parts": [{ "text": text }]
-                }));
-            } else {
-                system_instruction = Some(serde_json::json!({
-                    "parts": [{ "text": text }]
-                }));
             }
+            system_instruction = Some(serde_json::json!({
+                "parts": [{ "text": text }]
+            }));
         }
     } else if !is_cli && !features.sanitize_antigravity_prompts {
         system_instruction = Some(serde_json::json!({
-            "role": "user",
             "parts": [{ "text": antigravity_system_instruction.trim() }]
         }));
     }

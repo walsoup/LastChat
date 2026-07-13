@@ -943,7 +943,25 @@ async fn handle_chat_completion_internal(
             tried_emails.push(acc.email.clone());
         }
 
-        let project_id = acc.project_id.clone().unwrap_or_default();
+        let mut project_id = acc.project_id.clone().unwrap_or_default();
+        if project_id.is_empty() {
+            if let Some(tok) = &acc.access_token {
+                log_info!("[Auth] Project ID is empty for {}, attempting on-the-fly discovery...", acc.email);
+                match get_project_id(tok).await {
+                    Ok(pid) => {
+                        if !pid.is_empty() {
+                            log_info!("[Auth] Discovered project ID for {}: {}", acc.email, pid);
+                            project_id = pid.clone();
+                            acc.project_id = Some(pid);
+                            let _ = antigravity_proxy_rust::auth::add_account(acc.clone()).await;
+                        }
+                    }
+                    Err(e) => {
+                        log_err!("[Auth] Failed to discover project ID for {}: {}", acc.email, e);
+                    }
+                }
+            }
+        }
         let _ = antigravity_proxy_rust::auth::ensure_fingerprint(&mut acc);
         let fp = acc.fingerprint.clone().unwrap();
 

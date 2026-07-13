@@ -253,6 +253,30 @@ class AntigravityProxyManager(
                     runCatching { Log.w(TAG, "Antigravity Proxy process exited with code: ${proc.exitValue()}") }
                 }
             }
+
+            // Wait up to 1.5 seconds for the port to become active
+            var started = false
+            for (i in 1..30) {
+                if (proc.isAlive) {
+                    try {
+                        java.net.Socket().use { socket ->
+                            socket.connect(java.net.InetSocketAddress("127.0.0.1", port), 50)
+                            started = true
+                        }
+                        break
+                    } catch (e: Exception) {
+                        // ignore and wait
+                    }
+                } else {
+                    break
+                }
+                kotlinx.coroutines.delay(50)
+            }
+            if (started) {
+                Log.i(TAG, "Antigravity Proxy is verified running and listening on port $port.")
+            } else {
+                Log.w(TAG, "Antigravity Proxy process started, but port $port is not listening yet.")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start Antigravity Proxy", e)
         }
