@@ -2,7 +2,10 @@ package me.rerere.rikkahub.data.antigravity
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import io.ktor.http.ContentType
 import io.ktor.server.application.call
@@ -18,6 +21,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -78,6 +83,7 @@ class AntigravityOAuthManager(
     /** The redirect URI we're currently using (localhost or custom scheme). Null = not started yet. */
     private var activeRedirectUri: String? = null
     private val sessions = ConcurrentHashMap<String, OAuthSession>()
+    private val processingStates = ConcurrentHashMap.newKeySet<String>()
     private val _status = MutableStateFlow<AntigravityOAuthStatus>(AntigravityOAuthStatus.Idle)
     val status: StateFlow<AntigravityOAuthStatus> = _status.asStateFlow()
     private val json = Json { ignoreUnknownKeys = true }
@@ -140,7 +146,19 @@ class AntigravityOAuthManager(
         val callbackState = uri.getQueryParameter("state")
         val code = uri.getQueryParameter("code")
         val error = uri.getQueryParameter("error")
-        val session = callbackState?.let(sessions::remove)
+
+        if (callbackState != null && processingStates.contains(callbackState)) {
+            Log.i(TAG, "handleDeepLink: state $callbackState is already processing or completed, ignoring duplicate deep link")
+            return
+        }
+
+        val session = callbackState?.let { state ->
+            val s = sessions.remove(state)
+            if (s != null) {
+                processingStates.add(state)
+            }
+            s
+        }
         when {
             session == null -> _status.value = AntigravityOAuthStatus.Error("OAuth state mismatch or expired session")
             !error.isNullOrBlank() -> _status.value = AntigravityOAuthStatus.Error(error)
@@ -151,6 +169,7 @@ class AntigravityOAuthManager(
 
     fun consumeResult() {
         _status.value = AntigravityOAuthStatus.Idle
+        processingStates.clear()
     }
 
     // -------------------------------------------------------------------------
@@ -173,13 +192,25 @@ class AntigravityOAuthManager(
 
         return try {
             val port = findFreePort()
-            server = embeddedServer(CIO, host = "127.0.0.1", port = port) {
+            server = embeddedServer(CIO, host = "0.0.0.0", port = port) {
                 routing {
                     get("/oauth-callback") {
                         val callbackState = call.request.queryParameters["state"]
                         val code = call.request.queryParameters["code"]
                         val error = call.request.queryParameters["error"]
-                        val session = callbackState?.let(sessions::remove)
+
+                        if (callbackState != null && processingStates.contains(callbackState)) {
+                            call.respondText(callbackPage(true), ContentType.Text.Html)
+                            return@get
+                        }
+
+                        val session = callbackState?.let { state ->
+                            val s = sessions.remove(state)
+                            if (s != null) {
+                                processingStates.add(state)
+                            }
+                            s
+                        }
                         when {
                             session == null -> {
                                 _status.value = AntigravityOAuthStatus.Error("OAuth state mismatch")
@@ -222,6 +253,7 @@ class AntigravityOAuthManager(
 
     private suspend fun processAuthCode(code: String, session: OAuthSession) {
         try {
+            awaitNetworkUnblocked()
             val tokenResponse = exchangeCode(code, session)
             val email = getUserEmail(tokenResponse.accessToken)
             val projectId = getProjectId(tokenResponse.accessToken)
@@ -251,6 +283,26 @@ class AntigravityOAuthManager(
             _status.value = AntigravityOAuthStatus.Error(
                 error.message ?: "OAuth token exchange failed"
             )
+        }
+    }
+
+    private suspend fun awaitNetworkUnblocked() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val connectivityManager = context.getSystemService(ConnectivityManager::class.java) ?: return
+        suspendCancellableCoroutine { continuation ->
+            lateinit var callback: ConnectivityManager.NetworkCallback
+            callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+                    if (!blocked && continuation.isActive) {
+                        runCatching { connectivityManager.unregisterNetworkCallback(callback) }
+                        continuation.resume(Unit)
+                    }
+                }
+            }
+            continuation.invokeOnCancellation {
+                runCatching { connectivityManager.unregisterNetworkCallback(callback) }
+            }
+            connectivityManager.registerDefaultNetworkCallback(callback)
         }
     }
 
