@@ -38,6 +38,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           targets: aarch64-linux-android,x86_64-linux-android,armv7-linux-androideabi
+          cache: false
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
