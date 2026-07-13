@@ -49,6 +49,8 @@ jobs:
         run: cargo install cargo-ndk --locked
 
       - name: Build Antigravity Proxy
+        env:
+          RUSTFLAGS: "-A warnings"
         run: |
           cd antigravity-proxy-rust
           mkdir -p ../app/src/main/jniLibs/arm64-v8a
