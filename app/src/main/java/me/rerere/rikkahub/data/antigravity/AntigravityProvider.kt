@@ -31,6 +31,7 @@ class AntigravityProvider(
     )
 
     private fun ProviderSetting.Antigravity.toOpenAI(): ProviderSetting.OpenAI {
+        val port = antigravityProxyManager.activePort
         return ProviderSetting.OpenAI(
             id = this.id,
             enabled = this.enabled,
@@ -41,7 +42,7 @@ class AntigravityProvider(
             tags = this.tags,
             customIconUri = this.customIconUri,
             apiKey = "any",
-            baseUrl = "http://127.0.0.1:3000/v1",
+            baseUrl = "http://127.0.0.1:$port/v1",
             chatCompletionsPath = "/chat/completions",
             useResponseApi = false
         )

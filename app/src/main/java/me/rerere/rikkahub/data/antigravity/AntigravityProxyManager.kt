@@ -37,7 +37,7 @@ class AntigravityProxyManager(
     private var job: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    val port = 3000
+    var activePort: Int = 3000
 
     suspend fun ensureRunning() {
         mutex.withLock {
@@ -228,8 +228,16 @@ class AntigravityProxyManager(
                 .directory(filesDir)
                 .redirectErrorStream(true)
 
+            val freePort = try {
+                java.net.ServerSocket(0).use { it.localPort }
+            } catch (e: Exception) {
+                3000
+            }
+            activePort = freePort
+            Log.i(TAG, "Allocated free port for Antigravity Proxy: $freePort")
+
             pb.environment().apply {
-                put("PORT", port.toString())
+                put("PORT", activePort.toString())
                 put("CONFIG_FILE", configFile.absolutePath)
                 put("ACCOUNTS_FILE", accountsFile.absolutePath)
             }
@@ -260,7 +268,7 @@ class AntigravityProxyManager(
                 if (proc.isAlive) {
                     try {
                         java.net.Socket().use { socket ->
-                            socket.connect(java.net.InetSocketAddress("127.0.0.1", port), 50)
+                            socket.connect(java.net.InetSocketAddress("127.0.0.1", activePort), 50)
                             started = true
                         }
                         break
@@ -273,9 +281,9 @@ class AntigravityProxyManager(
                 kotlinx.coroutines.delay(50)
             }
             if (started) {
-                Log.i(TAG, "Antigravity Proxy is verified running and listening on port $port.")
+                Log.i(TAG, "Antigravity Proxy is verified running and listening on port $activePort.")
             } else {
-                Log.w(TAG, "Antigravity Proxy process started, but port $port is not listening yet.")
+                Log.w(TAG, "Antigravity Proxy process started, but port $activePort is not listening yet.")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start Antigravity Proxy", e)
