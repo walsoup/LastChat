@@ -406,8 +406,18 @@ class AntigravityProvider(
 
         put("contents", buildContents(messages))
 
-        buildGoogleToolsPayload(params)?.let { toolsPayload ->
-            put("tools", toolsPayload)
+        val googleTools = buildGoogleToolsPayload(params)
+        if (providerSetting.googleSearch || googleTools != null) {
+            putJsonArray("tools") {
+                if (googleTools != null) {
+                    googleTools.forEach { add(it) }
+                }
+                if (providerSetting.googleSearch) {
+                    add(buildJsonObject {
+                        put("googleSearch", buildJsonObject {})
+                    })
+                }
+            }
         }
     }
 
