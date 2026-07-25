@@ -156,7 +156,7 @@ class GoogleProvider(
         if (providerSetting.vertexAI) {
             val accessToken = serviceAccountTokenProvider.fetchAccessToken(
                 serviceAccountEmail = providerSetting.serviceAccountEmail.trim(),
-                privateKeyPem = StringEscapeUtils.unescapeJson(providerSetting.privateKey.trim()),
+                privateKeyPem = providerSetting.privateKey.trim().unescapeJsonStringContent(),
             )
             headers = headers + ("Authorization" to "Bearer $accessToken")
         }
@@ -508,11 +508,12 @@ class GoogleProvider(
     }
 
     private fun googleRoleToCommonRole(role: String): MessageRole {
-        return when (role) {
+        return when (role.lowercase()) {
             "user" -> MessageRole.USER
-            "system" -> MessageRole.SYSTEM
-            "model" -> MessageRole.ASSISTANT
-            else -> error("Unknown role $role")
+            "system", "developer" -> MessageRole.SYSTEM
+            "model", "assistant" -> MessageRole.ASSISTANT
+            "tool", "function" -> MessageRole.USER
+            else -> MessageRole.ASSISTANT
         }
     }
 
@@ -520,9 +521,9 @@ class GoogleProvider(
         val role = googleRoleToCommonRole(
             message["role"]?.jsonPrimitive?.contentOrNull ?: "model"
         )
-        val content = message["content"]?.jsonObject ?: error("No content")
-        val parts = content["parts"]?.jsonArray?.map { part ->
-            parseMessagePart(part.jsonObject)
+        val content = message["content"]?.jsonObject
+        val parts = content?.get("parts")?.jsonArray?.mapNotNull { part ->
+            (part as? JsonObject)?.let { parseMessagePart(it) }
         } ?: emptyList()
 
         val groundingMetadata = message["groundingMetadata"]?.jsonObject
@@ -552,43 +553,65 @@ class GoogleProvider(
         return chunks
     }
 
-    private fun parseMessagePart(jsonObject: JsonObject): UIMessagePart {
+    private fun parseMessagePart(jsonObject: JsonObject): UIMessagePart? {
+        val thoughtSignatureMetadata = parseThoughtSignatureMetadata(jsonObject)
         return when {
             jsonObject.containsKey("text") -> {
                 val thought = jsonObject["thought"]?.jsonPrimitive?.booleanOrNull ?: false
-                val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
+                val text = jsonObject["text"]?.jsonPrimitive?.contentOrNull ?: ""
                 if (thought) UIMessagePart.Reasoning(
                     reasoning = text,
                     createdAt = Clock.System.now(),
-                    finishedAt = null
-                ) else UIMessagePart.Text(text)
+                    finishedAt = null,
+                    metadata = thoughtSignatureMetadata,
+                ) else UIMessagePart.Text(
+                    text = text,
+                    metadata = thoughtSignatureMetadata,
+                )
             }
 
             jsonObject.containsKey("functionCall") -> {
-                val functionCall = jsonObject["functionCall"]?.jsonObject
-                    ?: error("No functionCall")
+                val functionCall = jsonObject["functionCall"]?.jsonObject ?: return null
                 UIMessagePart.ToolCall(
                     toolCallId = "",
                     toolName = functionCall["name"]?.jsonPrimitive?.contentOrNull ?: "",
                     arguments = json.encodeToString(functionCall["args"] ?: JsonObject(emptyMap())),
-                    metadata = buildJsonObject {
+                    metadata = thoughtSignatureMetadata ?: buildJsonObject {
                         put("thoughtSignature", jsonObject["thoughtSignature"]?.jsonPrimitive?.contentOrNull)
                     }
                 )
             }
 
             jsonObject.containsKey("inlineData") -> {
-                val inlineData = jsonObject["inlineData"]?.jsonObject
-                    ?: error("No inlineData")
-                val mime = inlineData["mimeType"]?.jsonPrimitive?.content ?: "image/png"
-                val data = inlineData["data"]?.jsonPrimitive?.content ?: ""
-                require(mime.startsWith("image/")) {
-                    "Only image mime type is supported"
+                val inlineData = jsonObject["inlineData"]?.jsonObject ?: return null
+                val mime = inlineData["mimeType"]?.jsonPrimitive?.contentOrNull ?: "image/png"
+                val data = inlineData["data"]?.jsonPrimitive?.contentOrNull ?: ""
+                if (!mime.startsWith("image/")) {
+                    return UIMessagePart.Text(
+                        text = "[Media: $mime]",
+                        metadata = thoughtSignatureMetadata,
+                    )
                 }
-                UIMessagePart.Image(data)
+                UIMessagePart.Image(
+                    url = data,
+                    metadata = thoughtSignatureMetadata,
+                )
             }
 
-            else -> error("unknown message part type: $jsonObject")
+            else -> {
+                PlatformLog.w(TAG, "Unrecognized message part: $jsonObject")
+                null
+            }
+        }
+    }
+
+    private fun parseThoughtSignatureMetadata(jsonObject: JsonObject): JsonObject? {
+        val thoughtSignature = jsonObject["thoughtSignature"]?.jsonPrimitive?.contentOrNull
+            ?: jsonObject["thought_signature"]?.jsonPrimitive?.contentOrNull
+        return thoughtSignature?.let { signature ->
+            buildJsonObject {
+                put("thoughtSignature", signature)
+            }
         }
     }
 
