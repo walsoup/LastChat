@@ -505,7 +505,6 @@ val dataSourceModule = module {
                     mediaEncoder = AndroidPlatformMediaEncoder(),
                     oauthManager = get(),
                     settingsStore = get(),
-                    antigravityProxyManager = get(),
                 )
             )
         }
