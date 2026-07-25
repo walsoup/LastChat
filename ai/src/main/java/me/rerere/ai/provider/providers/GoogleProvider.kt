@@ -129,12 +129,18 @@ class GoogleProvider(
         ServiceAccountTokenProvider(platformHttpClient, platformJwtSigner)
     }
 
+    private fun cleanModelId(rawId: String): String {
+        return rawId.removePrefix("publishers/google/models/").removePrefix("models/")
+    }
+
     private fun buildUrl(providerSetting: ProviderSetting.Google, path: String): String {
+        val cleanPath = path.trimStart('/')
         return if (!providerSetting.vertexAI) {
             val key = keyRoulette.next(providerSetting.apiKey)
-            "${providerSetting.baseUrl}/$path".appendQueryParameter("key", key)
+            val cleanBaseUrl = providerSetting.baseUrl.trimEnd('/')
+            "$cleanBaseUrl/$cleanPath".appendQueryParameter("key", key)
         } else {
-            "https://aiplatform.googleapis.com/v1/projects/${providerSetting.projectId}/locations/${providerSetting.location}/$path"
+            "https://aiplatform.googleapis.com/v1/projects/${providerSetting.projectId}/locations/${providerSetting.location}/$cleanPath"
         }
     }
 
@@ -148,16 +154,13 @@ class GoogleProvider(
             headers = headers + ("Content-Type" to "application/json")
         }
         if (providerSetting.vertexAI) {
-            headers = headers + ("Authorization" to "Bearer ${fetchVertexAccessToken(providerSetting)}")
+            val accessToken = serviceAccountTokenProvider.fetchAccessToken(
+                serviceAccountEmail = providerSetting.serviceAccountEmail.trim(),
+                privateKeyPem = StringEscapeUtils.unescapeJson(providerSetting.privateKey.trim()),
+            )
+            headers = headers + ("Authorization" to "Bearer $accessToken")
         }
         return headers
-    }
-
-    private suspend fun fetchVertexAccessToken(providerSetting: ProviderSetting.Google): String {
-        return serviceAccountTokenProvider.fetchAccessToken(
-            serviceAccountEmail = providerSetting.serviceAccountEmail.trim(),
-            privateKeyPem = providerSetting.privateKey.unescapeJsonStringContent(),
-        )
     }
 
     override suspend fun listModels(providerSetting: ProviderSetting.Google): List<Model> =
@@ -174,7 +177,8 @@ class GoogleProvider(
             if (response.statusCode in 200..299) {
                 val body = response.body.decodeToString()
                 PlatformLog.d(TAG, "listModels: $body")
-                val bodyObject = json.parseToJsonElement(body).jsonObject
+                val bodyObject = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+                    ?: return@withContext emptyList()
                 val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
 
                 models.mapNotNull {
@@ -182,22 +186,22 @@ class GoogleProvider(
 
                     // 忽略非chat/embedding模型
                     val supportedGenerationMethods = modelObject["supportedGenerationMethods"]?.jsonArray
-                        ?.map { method -> method.jsonPrimitive.content }
+                        ?.mapNotNull { method -> method.jsonPrimitiveOrNull?.content }
                         ?: return@mapNotNull null
                     if ("generateContent" !in supportedGenerationMethods && "embedContent" !in supportedGenerationMethods) {
                         return@mapNotNull null
                     }
 
-                    val modelId = modelObject["name"]?.jsonPrimitive?.contentOrNull?.substringAfter("/")
-                        ?: return@mapNotNull null
-                    val displayName = modelObject["displayName"]?.jsonPrimitive?.contentOrNull
+                    val name = modelObject["name"]?.jsonPrimitiveOrNull?.content ?: return@mapNotNull null
+                    val displayName = modelObject["displayName"]?.jsonPrimitiveOrNull?.content
                         ?.ifBlank { null }
-                        ?: modelId
+                        ?: cleanModelId(name)
 
+                    val cleanId = cleanModelId(name)
                     Model(
-                        modelId = modelId,
+                        modelId = cleanId,
                         displayName = displayName,
-                        canonicalModelId = ModelIdNormalizer.canonicalize(modelId),
+                        canonicalModelId = ModelIdNormalizer.canonicalize(cleanId),
                         type = if ("generateContent" in supportedGenerationMethods) ModelType.CHAT else ModelType.EMBEDDING,
                     )
                 }
@@ -213,12 +217,13 @@ class GoogleProvider(
     ): MessageChunk = withContext(me.rerere.ai.util.providerIoDispatcher) {
         val requestBody = buildCompletionRequestBody(messages, params)
 
+        val cleanId = cleanModelId(params.model.modelId)
         val url = buildUrl(
             providerSetting = providerSetting,
             path = if (providerSetting.vertexAI) {
-                "publishers/google/models/${params.model.modelId}:generateContent"
+                "publishers/google/models/$cleanId:generateContent"
             } else {
-                "models/${params.model.modelId}:generateContent"
+                "models/$cleanId:generateContent"
             }
         )
 
@@ -272,12 +277,13 @@ class GoogleProvider(
     ): Flow<MessageChunk> = callbackFlow {
         val requestBody = buildCompletionRequestBody(messages, params)
 
+        val cleanId = cleanModelId(params.model.modelId)
         val url = buildUrl(
             providerSetting = providerSetting,
             path = if (providerSetting.vertexAI) {
-                "publishers/google/models/${params.model.modelId}:streamGenerateContent"
+                "publishers/google/models/$cleanId:streamGenerateContent"
             } else {
-                "models/${params.model.modelId}:streamGenerateContent"
+                "models/$cleanId:streamGenerateContent"
             }
         ).appendQueryParameter("alt", "sse")
 
