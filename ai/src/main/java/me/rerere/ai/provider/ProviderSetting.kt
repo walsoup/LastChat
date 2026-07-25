@@ -368,7 +368,7 @@ sealed class ProviderSetting {
         override val customIconUri: String? = null,
         @Transient override val builtIn: Boolean = false,
         var apiKey: String = "",
-        var baseUrl: String = "http://127.0.0.1:3000/v1",
+        var baseUrl: String = "https://daily-cloudcode-pa.googleapis.com",
         var accessToken: String = "",
         var refreshToken: String = "",
         var tokenExpiry: Long = 0L,

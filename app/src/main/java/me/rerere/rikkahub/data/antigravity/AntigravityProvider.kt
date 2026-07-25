@@ -35,7 +35,7 @@ class AntigravityProvider(
         val rawUrl = this.baseUrl.trim()
         val effectiveBaseUrl = if (rawUrl.startsWith("http://127.0.0.1") || rawUrl.startsWith("http://localhost")) {
             rawUrl.trimEnd('/')
-        } else if (rawUrl.contains("cloudcode-pa.googleapis.com") || rawUrl.contains("?alt=sse") || rawUrl.isBlank()) {
+        } else if (rawUrl.contains("cloudcode-pa.googleapis.com") || rawUrl.isBlank()) {
             "http://127.0.0.1:$port/v1"
         } else {
             rawUrl.trimEnd('/')

@@ -20,7 +20,7 @@ class AntigravityProvider(
 
     private fun ProviderSetting.Antigravity.toOpenAI(): ProviderSetting.OpenAI {
         val rawUrl = this.baseUrl.trim()
-        val cleanBaseUrl = if (rawUrl.contains("cloudcode-pa.googleapis.com") || rawUrl.contains("?alt=sse") || rawUrl.isBlank()) {
+        val cleanBaseUrl = if (rawUrl.contains("cloudcode-pa.googleapis.com") || rawUrl.isBlank()) {
             "http://127.0.0.1:3000/v1"
         } else {
             rawUrl.trimEnd('/')

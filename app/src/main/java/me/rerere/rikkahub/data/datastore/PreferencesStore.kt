@@ -355,7 +355,6 @@ class SettingsStore(
                         )
 
                         is ProviderSetting.Antigravity -> provider.copy(
-                            baseUrl = if (provider.baseUrl.contains("cloudcode-pa.googleapis.com") || provider.baseUrl.contains("?alt=sse") || provider.baseUrl.isBlank()) "http://127.0.0.1:3000/v1" else provider.baseUrl,
                             models = provider.models.distinctBy { model -> model.id }
                         )
 
