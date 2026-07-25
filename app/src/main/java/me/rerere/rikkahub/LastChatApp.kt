@@ -33,10 +33,12 @@ import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import me.rerere.rikkahub.service.CHAT_STORAGE_MAINTENANCE_WORK_NAME
 import me.rerere.rikkahub.service.ChatStorageMaintenanceWorker
-import me.rerere.rikkahub.service.HybridMemoryCatchUpWorker
+import me.rerere.rikkahub.service.MemoryConsolidationWorker
 import me.rerere.rikkahub.service.SPONTANEOUS_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.service.SPONTANEOUS_WORK_INTERVAL_MINUTES
 import me.rerere.rikkahub.service.SPONTANEOUS_WORK_NAME
@@ -47,12 +49,14 @@ import java.util.concurrent.TimeUnit
 import org.koin.androidx.workmanager.koin.workManagerFactory
 import org.koin.core.context.startKoin
 import me.rerere.common.platform.PlatformHttpClient
+import me.rerere.common.inference.LocalInferenceManager
 import me.rerere.rikkahub.di.SEARCH_PLATFORM_HTTP_CLIENT
 import me.rerere.rikkahub.utils.acceptLanguageHeader
 import me.rerere.search.SearchService
 import org.koin.core.qualifier.named
 
 private const val TAG = "LastChatApp"
+private const val MEMORY_MAINTENANCE_WORK_NAME = "memory_maintenance_v3"
 
 const val CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID = "chat_completed"
 const val WEB_SERVER_NOTIFICATION_CHANNEL_ID = "web_server"
@@ -126,29 +130,28 @@ class LastChatApp : Application() {
                 .build()
         )
 
-        // Schedule Memory Consolidation Worker dynamically
-        get<AppScope>().launch {
-            get<SettingsStore>().settingsFlow
-                .map { it.consolidationWorkerIntervalMinutes to it.consolidationRequiresDeviceIdle }
-                .distinctUntilChanged()
-                .collect { (interval, idle) ->
-                    val constraints = Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED)
-                        .apply {
-                            if (idle) setRequiresDeviceIdle(true)
-                        }
-                        .build()
+        // Immediate post-reply jobs do the normal work. This unconstrained periodic reconciliation
+        // is the durable safety net for process death, offline provider failures, and restored data.
+        // It only queues a bounded set of incomplete conversations; successful jobs clear the flag.
+        WorkManager.getInstance(this).apply {
+            cancelUniqueWork("memory_consolidation")
+            enqueueUniquePeriodicWork(
+                MEMORY_MAINTENANCE_WORK_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                PeriodicWorkRequestBuilder<MemoryConsolidationWorker>(6, TimeUnit.HOURS).build(),
+            )
+        }
 
-                    WorkManager.getInstance(this@LastChatApp).enqueueUniquePeriodicWork(
-                        "hybrid_memory_catch_up",
-                        ExistingPeriodicWorkPolicy.UPDATE,
-                        PeriodicWorkRequestBuilder<HybridMemoryCatchUpWorker>(
-                            interval.toLong().coerceAtLeast(15), TimeUnit.MINUTES
-                        )
-                            .setConstraints(constraints)
-                            .build()
-                    )
-                }
+        // Memory v3 backfills evidence indexes and legacy claims silently. The marker is written
+        // when queued because the work itself is resumable and retries failures.
+        val memoryMigrationPrefs = getSharedPreferences("memory_v3_migration", MODE_PRIVATE)
+        if (memoryMigrationPrefs.getInt("queued_schema", 0) < 1) {
+            WorkManager.getInstance(this).enqueue(
+                OneTimeWorkRequestBuilder<MemoryConsolidationWorker>()
+                    .setInputData(workDataOf(MemoryConsolidationWorker.KEY_FULL_SCAN to true))
+                    .build()
+            )
+            memoryMigrationPrefs.edit().putInt("queued_schema", 1).apply()
         }
         
         // Update app shortcuts when recently used assistants change
@@ -243,6 +246,20 @@ class LastChatApp : Application() {
     override fun onTerminate() {
         super.onTerminate()
         get<AppScope>().cancel()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ||
+            level == android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
+        ) {
+            get<LocalInferenceManager>().requestEviction()
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        get<LocalInferenceManager>().requestEviction()
     }
 }
 

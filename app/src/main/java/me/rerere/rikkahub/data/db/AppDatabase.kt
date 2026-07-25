@@ -22,8 +22,8 @@ import me.rerere.rikkahub.data.db.dao.EmbeddingCacheDAO
 import me.rerere.rikkahub.data.db.dao.GenMediaDAO
 import me.rerere.rikkahub.data.db.dao.UsageStatsDAO
 import me.rerere.rikkahub.data.db.dao.MemoryDAO
+import me.rerere.rikkahub.data.db.dao.TemporalMemoryDao
 import me.rerere.rikkahub.data.db.dao.WorkspaceDAO
-import me.rerere.rikkahub.data.db.dao.HybridMemoryDao
 import me.rerere.rikkahub.data.db.entity.ChatEpisodeEntity
 import me.rerere.rikkahub.data.db.entity.ChatAttachmentEntity
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
@@ -32,19 +32,16 @@ import me.rerere.rikkahub.data.db.entity.DailyActivityEntity
 import me.rerere.rikkahub.data.db.entity.EmbeddingCacheEntity
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
 import me.rerere.rikkahub.data.db.entity.MemoryEntity
+import me.rerere.rikkahub.data.db.entity.MemoryClaimEntity
+import me.rerere.rikkahub.data.db.entity.MemoryClaimFtsEntity
+import me.rerere.rikkahub.data.db.entity.MemoryEpisodeV3Entity
+import me.rerere.rikkahub.data.db.entity.MemoryEpisodeV3FtsEntity
+import me.rerere.rikkahub.data.db.entity.MemoryIngestStateEntity
+import me.rerere.rikkahub.data.db.entity.MemoryProjectionEntity
+import me.rerere.rikkahub.data.db.entity.MemorySourceV3Entity
+import me.rerere.rikkahub.data.db.entity.MemorySourceV3FtsEntity
 import me.rerere.rikkahub.data.db.entity.UsageStatsEntity
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
-import me.rerere.rikkahub.data.db.entity.MemoryDocumentEntity
-import me.rerere.rikkahub.data.db.entity.MemoryDocumentRevisionEntity
-import me.rerere.rikkahub.data.db.entity.MemoryConversationDigestEntity
-import me.rerere.rikkahub.data.db.entity.MemorySearchRowEntity
-import me.rerere.rikkahub.data.db.entity.MemorySearchFtsEntity
-import me.rerere.rikkahub.data.db.entity.MemoryGraphNodeEntity
-import me.rerere.rikkahub.data.db.entity.MemoryGraphEdgeEntity
-import me.rerere.rikkahub.data.db.entity.MemoryGraphProvenanceEntity
-import me.rerere.rikkahub.data.db.entity.MemoryGraphOverrideEntity
-import me.rerere.rikkahub.data.db.entity.MemoryProcessingStateEntity
-import me.rerere.rikkahub.data.db.entity.MemoryConversionStateEntity
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.utils.JsonInstant
 import kotlinx.serialization.json.JsonArray
@@ -57,8 +54,27 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 @Database(
-    entities = [ConversationEntity::class, MemoryEntity::class, GenMediaEntity::class, ChatEpisodeEntity::class, EmbeddingCacheEntity::class, DailyActivityEntity::class, UsageStatsEntity::class, ChatAttachmentEntity::class, ConversationAttachmentRefEntity::class, WorkspaceEntity::class, MemoryDocumentEntity::class, MemoryDocumentRevisionEntity::class, MemoryConversationDigestEntity::class, MemorySearchRowEntity::class, MemorySearchFtsEntity::class, MemoryGraphNodeEntity::class, MemoryGraphEdgeEntity::class, MemoryGraphProvenanceEntity::class, MemoryGraphOverrideEntity::class, MemoryProcessingStateEntity::class, MemoryConversionStateEntity::class],
-    version = 36,
+    entities = [
+        ConversationEntity::class,
+        MemoryEntity::class,
+        GenMediaEntity::class,
+        ChatEpisodeEntity::class,
+        EmbeddingCacheEntity::class,
+        DailyActivityEntity::class,
+        UsageStatsEntity::class,
+        ChatAttachmentEntity::class,
+        ConversationAttachmentRefEntity::class,
+        WorkspaceEntity::class,
+        MemoryClaimEntity::class,
+        MemoryClaimFtsEntity::class,
+        MemoryEpisodeV3Entity::class,
+        MemoryEpisodeV3FtsEntity::class,
+        MemorySourceV3Entity::class,
+        MemorySourceV3FtsEntity::class,
+        MemoryIngestStateEntity::class,
+        MemoryProjectionEntity::class,
+    ],
+    version = 39,
     autoMigrations = [
         AutoMigration(from = 30, to = 31),
         AutoMigration(from = 1, to = 2),
@@ -91,6 +107,10 @@ import kotlinx.serialization.json.put
         // 32->33 is manual migration (MIGRATION_32_33) - adds last_model_id to conversation table
         AutoMigration(from = 33, to = 35),
         AutoMigration(from = 34, to = 35, spec = Migration_34_35::class),
+        AutoMigration(from = 35, to = 36),
+        AutoMigration(from = 36, to = 37),
+        AutoMigration(from = 37, to = 38, spec = Migration_37_38::class),
+        AutoMigration(from = 38, to = 39),
     ]
 )
 @TypeConverters(TokenUsageConverter::class)
@@ -102,6 +122,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationAttachmentRefDao(): ConversationAttachmentRefDao
 
     abstract fun memoryDao(): MemoryDAO
+
+    abstract fun temporalMemoryDao(): TemporalMemoryDao
 
     abstract fun genMediaDao(): GenMediaDAO
 
@@ -115,43 +137,8 @@ abstract class AppDatabase : RoomDatabase() {
 
     abstract fun workspaceDao(): WorkspaceDAO
 
-    abstract fun hybridMemoryDao(): HybridMemoryDao
-
     companion object {
         const val TAG = "AppDatabase"
-
-        val MIGRATION_35_36 = object : Migration(35, 36) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE `embedding_cache` ADD COLUMN `source_id` TEXT DEFAULT NULL")
-                db.execSQL("ALTER TABLE `embedding_cache` ADD COLUMN `source_kind` TEXT DEFAULT NULL")
-                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_embedding_cache_source_id_source_kind_model_id` ON `embedding_cache` (`source_id`, `source_kind`, `model_id`)")
-                db.execSQL("CREATE TABLE IF NOT EXISTS `memory_document` (`id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `content` TEXT NOT NULL, `char_limit` INTEGER NOT NULL, `revision` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `embedding` TEXT DEFAULT '', `embedding_blob` BLOB, `embedding_model_id` TEXT DEFAULT '', PRIMARY KEY(`id`))")
-                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_memory_document_assistant_id_kind` ON `memory_document` (`assistant_id`, `kind`)")
-                db.execSQL("CREATE TABLE IF NOT EXISTS `memory_document_revision` (`id` TEXT NOT NULL, `document_id` TEXT NOT NULL, `revision` INTEGER NOT NULL, `content` TEXT NOT NULL, `diff` TEXT NOT NULL, `reason` TEXT NOT NULL, `source` TEXT NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))")
-                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_memory_document_revision_document_id_revision` ON `memory_document_revision` (`document_id`, `revision`)")
-                db.execSQL("CREATE TABLE IF NOT EXISTS `memory_conversation_digest` (`id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL, `conversation_id` TEXT, `summary` TEXT NOT NULL, `open_threads` TEXT NOT NULL, `importance` INTEGER NOT NULL, `pinned` INTEGER NOT NULL, `dismissed` INTEGER NOT NULL, `source_available` INTEGER NOT NULL, `branch_signature` TEXT NOT NULL, `event_start` INTEGER NOT NULL, `event_end` INTEGER NOT NULL, `recorded_at` INTEGER NOT NULL, `last_reinforced_at` INTEGER NOT NULL, `embedding` TEXT DEFAULT '', `embedding_blob` BLOB, `embedding_model_id` TEXT DEFAULT '', PRIMARY KEY(`id`))")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `index_memory_conversation_digest_assistant_id_recorded_at` ON `memory_conversation_digest` (`assistant_id`, `recorded_at`)")
-                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_memory_conversation_digest_conversation_id` ON `memory_conversation_digest` (`conversation_id`)")
-                db.execSQL("CREATE TABLE IF NOT EXISTS `memory_search_row` (`row_id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `source_kind` TEXT NOT NULL, `source_ref_id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL, `conversation_id` TEXT, `message_id` TEXT, `node_id` TEXT, `version_tag` TEXT, `speaker` TEXT, `frame` TEXT, `event_start` INTEGER NOT NULL, `event_end` INTEGER NOT NULL, `recorded_at` INTEGER NOT NULL, `active` INTEGER NOT NULL, `text` TEXT NOT NULL, `embedding` TEXT DEFAULT '', `embedding_blob` BLOB, `embedding_model_id` TEXT DEFAULT '')")
-                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_memory_search_row_source_kind_source_ref_id` ON `memory_search_row` (`source_kind`, `source_ref_id`)")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `index_memory_search_row_assistant_id_active_recorded_at` ON `memory_search_row` (`assistant_id`, `active`, `recorded_at`)")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `index_memory_search_row_conversation_id_active` ON `memory_search_row` (`conversation_id`, `active`)")
-                db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS `memory_search_fts` USING FTS4(`text` TEXT NOT NULL, tokenize=unicode61 `remove_diacritics=2`)")
-                db.execSQL("CREATE TABLE IF NOT EXISTS `memory_graph_node` (`id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL, `label` TEXT NOT NULL, `normalized_label` TEXT NOT NULL, `kind` TEXT NOT NULL, `summary` TEXT, `hidden` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `embedding_blob` BLOB, `embedding_model_id` TEXT DEFAULT '', `frame` TEXT NOT NULL, `importance` INTEGER NOT NULL, `confidence` REAL NOT NULL, PRIMARY KEY(`id`))")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `index_memory_graph_node_assistant_id_normalized_label` ON `memory_graph_node` (`assistant_id`, `normalized_label`)")
-                db.execSQL("CREATE TABLE IF NOT EXISTS `memory_graph_edge` (`id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL, `subject_id` TEXT NOT NULL, `predicate` TEXT NOT NULL, `object_id` TEXT, `object_value` TEXT, `statement` TEXT NOT NULL, `confidence` REAL NOT NULL, `importance` INTEGER NOT NULL, `event_start` INTEGER NOT NULL, `event_end` INTEGER NOT NULL, `hidden` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `embedding_blob` BLOB, `embedding_model_id` TEXT DEFAULT '', `frame` TEXT NOT NULL, PRIMARY KEY(`id`))")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `index_memory_graph_edge_assistant_id_subject_id_predicate` ON `memory_graph_edge` (`assistant_id`, `subject_id`, `predicate`)")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `index_memory_graph_edge_object_id` ON `memory_graph_edge` (`object_id`)")
-                db.execSQL("CREATE TABLE IF NOT EXISTS `memory_graph_provenance` (`id` TEXT NOT NULL, `graph_kind` TEXT NOT NULL, `graph_id` TEXT NOT NULL, `conversation_id` TEXT, `message_id` TEXT, `excerpt` TEXT NOT NULL, `source_available` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `index_memory_graph_provenance_graph_kind_graph_id` ON `memory_graph_provenance` (`graph_kind`, `graph_id`)")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `index_memory_graph_provenance_conversation_id` ON `memory_graph_provenance` (`conversation_id`)")
-                db.execSQL("CREATE TABLE IF NOT EXISTS `memory_graph_override` (`id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL, `target_kind` TEXT NOT NULL, `target_id` TEXT NOT NULL, `operation` TEXT NOT NULL, `payload` TEXT NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `index_memory_graph_override_assistant_id_target_kind_target_id` ON `memory_graph_override` (`assistant_id`, `target_kind`, `target_id`)")
-                db.execSQL("CREATE TABLE IF NOT EXISTS `memory_processing_state` (`conversation_id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL, `branch_signature` TEXT NOT NULL, `indexed_at` INTEGER NOT NULL, `processed_at` INTEGER NOT NULL, `last_error` TEXT, PRIMARY KEY(`conversation_id`))")
-                db.execSQL("CREATE TABLE IF NOT EXISTS `memory_conversion_state` (`assistant_id` TEXT NOT NULL, `direction` TEXT NOT NULL, `source_revision` INTEGER NOT NULL, `converted_at` INTEGER NOT NULL, PRIMARY KEY(`assistant_id`, `direction`))")
-                db.execSQL("""INSERT OR IGNORE INTO memory_conversation_digest (id, assistant_id, conversation_id, summary, open_threads, importance, pinned, dismissed, source_available, branch_signature, event_start, event_end, recorded_at, last_reinforced_at, embedding, embedding_blob, embedding_model_id) SELECT 'legacy-episode-' || id, assistant_id, NULLIF(conversation_id, ''), content, '[]', significance, 0, 0, 1, '', start_time, end_time, end_time, last_accessed_at, embedding, embedding_blob, embedding_model_id FROM ChatEpisodeEntity""")
-            }
-        }
         
         val MIGRATION_11_12 = object : Migration(11, 12) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -669,3 +656,20 @@ class Migration_8_9 : AutoMigrationSpec
 @DeleteTable(tableName = "memory_store_meta")
 @DeleteColumn(tableName = "ConversationEntity", columnName = "extracted_up_to_index")
 class Migration_34_35 : AutoMigrationSpec
+
+@DeleteTable(tableName = "graph_memories")
+@DeleteTable(tableName = "graph_entities")
+@DeleteTable(tableName = "graph_memory_entity_links")
+@DeleteTable(tableName = "graph_memory_sources")
+@DeleteTable(tableName = "graph_memory_history")
+@DeleteTable(tableName = "graph_memory_relations")
+@DeleteTable(tableName = "memory_engine_state")
+@DeleteTable(tableName = "memory_transfer_jobs")
+@DeleteTable(tableName = "memory_transfer_links")
+@DeleteTable(tableName = "memory_transfer_conflicts")
+@DeleteTable(tableName = "memory_activity")
+@DeleteTable(tableName = "memory_suppressions")
+@DeleteTable(tableName = "session_memory_cursors")
+@DeleteTable(tableName = "memory_scope_messages")
+@DeleteTable(tableName = "graph_embedding_cache")
+class Migration_37_38 : AutoMigrationSpec

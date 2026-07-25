@@ -904,9 +904,8 @@ class RouteActivity : ComponentActivity() {
                                     id = route.id,
                                     startRoute = route.startRoute,
                                     initialMemoryTab = route.initialMemoryTab,
-                                    scrollToMemoryId = route.scrollToMemoryId
-                                    ,memorySourceKind = route.memorySourceKind
-                                    ,memorySourceId = route.memorySourceId
+                                    scrollToMemoryId = route.scrollToMemoryId,
+                                    scrollToMemoryStableId = route.scrollToMemoryStableId,
                                 )
                             }
                         }
@@ -1386,9 +1385,8 @@ sealed interface Screen {
         val id: String,
         val startRoute: String? = null,  // Navigate directly to a sub-route (e.g., "memory")
         val initialMemoryTab: Int? = null,  // 0 = Core, 1 = Episodic
-        val scrollToMemoryId: Int? = null,  // Memory ID to scroll to
-        val memorySourceKind: String? = null,
-        val memorySourceId: String? = null,
+        val scrollToMemoryId: Int? = null,  // Legacy memory ID to scroll to
+        val scrollToMemoryStableId: String? = null,
     ) : Screen
 
     @Serializable

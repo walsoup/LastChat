@@ -70,19 +70,16 @@ object DatabaseSanitizer {
                 "GenMediaEntity",
                 "ChatEpisodeEntity",
                 "EmbeddingCacheEntity",
+                "memory_claim",
+                "memory_claim_fts",
+                "memory_episode_v3",
+                "memory_episode_v3_fts",
+                "memory_source_v3",
+                "memory_source_v3_fts",
+                "memory_ingest_state",
+                "memory_projection",
                 "daily_activity",
-                "usage_stats",
-                "memory_document",
-                "memory_document_revision",
-                "memory_conversation_digest",
-                "memory_search_row",
-                "memory_search_fts",
-                "memory_graph_node",
-                "memory_graph_edge",
-                "memory_graph_provenance",
-                "memory_graph_override",
-                "memory_processing_state",
-                "memory_conversion_state",
+                "usage_stats"
             )
 
             for (table in tables) {

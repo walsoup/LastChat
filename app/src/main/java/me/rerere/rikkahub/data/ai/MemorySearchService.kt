@@ -23,17 +23,17 @@ import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
-import me.rerere.rikkahub.data.repository.HybridMemoryRepository
-import me.rerere.rikkahub.data.ai.rag.EmbeddingService
-import me.rerere.rikkahub.data.ai.rag.VectorEngine
-import me.rerere.rikkahub.data.ai.rag.toFloatArray
+import me.rerere.rikkahub.data.memory.TemporalMemoryRepository
+import me.rerere.rikkahub.data.memory.RecallKind
 import kotlinx.datetime.toInstant
 import kotlin.math.min
 import kotlin.uuid.Uuid
 
 private const val MEMORY_SEARCH_MAX_LIMIT = 8
-private const val MEMORY_SEARCH_CHAT_SUMMARY_LIMIT = 2
+private const val STRONG_INDEXED_RECALL_SCORE = 45
 private const val MEMORY_SEARCH_MAX_QUERIES = 8
+private const val TIME_WINDOW_EVIDENCE_SCORE = 70
+private const val MAX_TIME_WINDOW_CANDIDATES = 16
 
 internal data class ConversationRecallSpan(
     val conversationId: Uuid,
@@ -115,7 +115,51 @@ internal fun findConversationRecallSpans(
     }.take(maxSpans)
 }
 
-internal fun buildFallbackRecallSummary(span: ConversationRecallSpan): String {
+/**
+ * Builds conversation evidence from the requested interval itself. A temporal query such as
+ * "what did we discuss yesterday?" must not require the word "yesterday" (or any other query
+ * token) to appear in the remembered messages.
+ */
+internal fun findConversationTimeSpans(
+    conversation: Conversation,
+    timeRange: MemorySearchTimeRange,
+    maxSpans: Int = 4,
+    messagesPerSpan: Int = 10,
+): List<ConversationRecallSpan> {
+    val messages = conversation.currentMessages.filter { it.toContentText().isNotBlank() }
+    val inRange = messages.mapIndexedNotNull { index, message ->
+        val timestampMillis = message.createdAt
+            .toInstant(kotlinx.datetime.TimeZone.currentSystemDefault())
+            .toEpochMilliseconds()
+        if (timeRange.contains(timestampMillis)) Triple(index, message, timestampMillis) else null
+    }
+    if (inRange.isEmpty()) return emptyList()
+
+    val chunks = inRange.chunked(messagesPerSpan.coerceAtLeast(2))
+    val spanCount = maxSpans.coerceAtLeast(1)
+    val representativeChunks = when {
+        chunks.size <= spanCount -> chunks
+        spanCount == 1 -> listOf(chunks.last())
+        else -> List(spanCount) { position ->
+            val index = (position.toLong() * chunks.lastIndex / (spanCount - 1)).toInt()
+            chunks[index]
+        }.distinctBy { it.first().first }
+    }
+    return representativeChunks
+        .map { chunk ->
+            ConversationRecallSpan(
+                conversationId = conversation.id,
+                conversationTitle = conversation.title,
+                messageIndex = chunk.first().first,
+                messages = chunk.map { it.second },
+                timestampMillis = chunk.last().third,
+                score = TIME_WINDOW_EVIDENCE_SCORE + chunk.size,
+                matchedText = null,
+            )
+        }
+}
+
+internal fun buildFallbackRecallSummary(span: ConversationRecallSpan, limit: Int = 700): String {
     return span.messages
         .mapNotNull { message ->
             val text = message.toContentText().replace(Regex("\\s+"), " ").trim()
@@ -131,7 +175,7 @@ internal fun buildFallbackRecallSummary(span: ConversationRecallSpan): String {
             }
         }
         .joinToString(" / ")
-        .take(700)
+        .take(limit)
 }
 
 internal fun memorySearchTokens(query: String): List<String> {
@@ -373,8 +417,7 @@ class MemorySearchService(
     private val providerManager: ProviderManager,
     private val memoryRepository: MemoryRepository,
     private val conversationRepository: ConversationRepository,
-    private val hybridMemoryRepository: HybridMemoryRepository,
-    private val embeddingService: EmbeddingService,
+    private val temporalMemoryRepository: TemporalMemoryRepository,
 ) {
     suspend fun searchMemory(
         assistant: Assistant,
@@ -382,11 +425,6 @@ class MemorySearchService(
         query: String,
         limit: Int = 5,
         timeRange: String? = null,
-        sourceTypes: Set<String> = emptySet(),
-        speaker: String? = null,
-        entity: String? = null,
-        conversationId: String? = null,
-        frame: String? = null,
     ): JsonObject = withContext(Dispatchers.IO) {
         val trimmedQuery = query.trim()
         if (trimmedQuery.isBlank()) {
@@ -399,81 +437,155 @@ class MemorySearchService(
 
         val boundedLimit = limit.coerceIn(1, MEMORY_SEARCH_MAX_LIMIT)
         val parsedTimeRange = parseMemorySearchTimeRange(timeRange ?: trimmedQuery)
-        val embeddingModelId = embeddingService.getEmbeddingModelId(assistant.id.toString())
-        val queryEmbedding = runCatching { embeddingService.embed(trimmedQuery, assistant.id.toString()).toFloatArray() }.getOrNull()
-        val indexedResults = hybridMemoryRepository.search(
-            assistantId = assistant.id.toString(),
-            query = trimmedQuery,
-            limit = boundedLimit * 4,
-            start = parsedTimeRange?.startMillis,
-            end = parsedTimeRange?.endMillis,
-        ).filter { it.conversationId != activeConversationId?.toString() }
-            .filter { sourceTypes.isEmpty() || it.sourceKind.name.lowercase() in sourceTypes.map(String::lowercase) }
-            .filter { speaker.isNullOrBlank() || it.speaker.equals(speaker, ignoreCase = true) }
-            .filter { conversationId.isNullOrBlank() || it.conversationId == conversationId }
-            .filter { frame.isNullOrBlank() || it.frame.equals(frame, ignoreCase = true) }
-            .filter { entity.isNullOrBlank() || it.text.contains(entity, ignoreCase = true) }
-            .map { hit ->
-                val vectorScore = if (queryEmbedding != null && hit.embeddingModelId == embeddingModelId) {
-                    hit.embeddingBlob?.toFloatArray()?.let { VectorEngine.cosineSimilarity(queryEmbedding, it) }
-                } else null
-                val combinedConfidence = if (vectorScore == null) hit.score else hit.score * 0.55f + vectorScore * 0.45f
-                RecallResult(
-                    source = hit.sourceKind.name.lowercase(),
-                    id = hit.sourceId,
-                    summary = hit.text.toRecallSnippet(700),
-                    content = hit.text,
-                    timestampMillis = hit.recordedAt,
-                    confidence = combinedConfidence.coerceIn(0f, 1f),
-                    title = hit.sourceKind.name.lowercase().replace('_', ' '),
-                    matchedText = hit.text.toRecallSnippet(260),
-                    score = (combinedConfidence * 100).toInt(),
-                    conversationId = hit.conversationId,
-                    messageId = hit.messageId,
-                )
-            }
-        val entryEntities = memoryRepository.getMemoryEntitiesOfAssistant(assistant.id.toString())
-        val entryResults = entryEntities
-            .asSequence()
-            .filter { it.type == MemoryType.CORE }
-            .filter { sourceTypes.isEmpty() || "entry" in sourceTypes.map(String::lowercase) }
-            .filter { entity.isNullOrBlank() || it.content.contains(entity, ignoreCase = true) }
-            .mapNotNull { entity ->
-                val memory = AssistantMemory(entity.id, entity.content, entity.type, entity.embedding != null, entity.embeddingModelId, entity.createdAt)
-                val score = scoreMemorySearchText(memory.content, trimmedQuery)
-                val vectorScore = if (queryEmbedding != null && entity.embeddingModelId == embeddingModelId) {
-                    entity.embeddingBlob?.toFloatArray()?.let { VectorEngine.cosineSimilarity(queryEmbedding, it) }
-                } else null
-                if (score <= 0 && vectorScore == null) null else RecallResult(
-                    source = "entry",
-                    id = memory.id.toString(),
-                    summary = memory.content.toRecallSnippet(700),
-                    content = memory.content,
-                    timestampMillis = memory.timestamp,
-                    confidence = if (vectorScore == null) confidenceFromScore(score) else (confidenceFromScore(score) * 0.4f + vectorScore * 0.6f).coerceIn(0f, 1f),
-                    matchedText = memory.content.toRecallSnippet(260),
-                    score = score,
-                )
-            }.take(boundedLimit).toList()
+        val settings = settingsStore.settingsFlow.first()
+        val warnings = mutableListOf<String>()
+        val deterministicQueries = buildDeterministicMemoryRecallQueries(trimmedQuery)
+        val agentQueries = runCatching {
+            generateSubagentRecallQueries(
+                settings = settings,
+                assistant = assistant,
+                query = trimmedQuery,
+                timeRange = parsedTimeRange,
+            )
+        }.getOrElse { throwable ->
+            if (throwable is CancellationException) throw throwable
+            warnings += "Subagent query expansion was unavailable, so deterministic recall queries were used."
+            emptyList()
+        }
+        val recallQueries = (deterministicQueries + agentQueries)
+            .distinctBy { it.text.normalizedRecallText() }
+            .take(MEMORY_SEARCH_MAX_QUERIES)
 
-        val results = (indexedResults + entryResults)
+        val memoryResults = runCatching {
+            searchTemporalMemories(assistant, recallQueries, boundedLimit, parsedTimeRange)
+        }.getOrElse { throwable ->
+            if (throwable is CancellationException) throw throwable
+            warnings += "Stored memory search fell back with no results."
+            emptyList()
+        }
+        val hasStrongIndexedRecall = parsedTimeRange == null && memoryResults.size >= boundedLimit &&
+            memoryResults.any { (it.score ?: 0) >= STRONG_INDEXED_RECALL_SCORE }
+        val rawChatSpans = if (hasStrongIndexedRecall) {
+            emptyList()
+        } else {
+            runCatching {
+                searchPastChatSpans(
+                    assistant = assistant,
+                    activeConversationId = activeConversationId,
+                    queries = recallQueries,
+                    limit = if (parsedTimeRange != null) {
+                        (boundedLimit * 3).coerceAtMost(MAX_TIME_WINDOW_CANDIDATES)
+                    } else {
+                        boundedLimit
+                    },
+                    timeRange = parsedTimeRange,
+                )
+            }.getOrElse { throwable ->
+                if (throwable is CancellationException) throw throwable
+                warnings += "Past chat search fell back with no results."
+                emptyList()
+            }
+        }
+        val chatSpans = if (parsedTimeRange != null) {
+            selectTimeWindowSpans(
+                settings = settings,
+                assistant = assistant,
+                query = trimmedQuery,
+                timeRange = parsedTimeRange,
+                candidates = rawChatSpans,
+                limit = boundedLimit,
+            )
+        } else {
+            rawChatSpans
+        }
+
+        val chatResults = chatSpans.map { span ->
+            // Final synthesis sees the matched excerpt and surrounding messages together, so a
+            // separate hosted-model call for every span only adds latency without more evidence.
+            val summary = buildFallbackRecallSummary(span, limit = 1_800)
+            RecallResult(
+                source = "past_chat",
+                id = "${span.conversationId}:${span.messageIndex}",
+                summary = summary,
+                content = summary,
+                timestampMillis = span.timestampMillis,
+                confidence = confidenceFromScore(span.score),
+                title = span.conversationTitle.takeIf { it.isNotBlank() },
+                matchedText = span.matchedText,
+                score = span.score,
+            )
+        }
+
+        val results = (memoryResults + chatResults)
             .sortedWith(
-                compareByDescending<RecallResult> { it.confidence }
-                    .thenByDescending { it.score ?: 0 }
+                compareByDescending<RecallResult> { it.score ?: 0 }
+                    .thenByDescending { it.confidence }
                     .thenByDescending { it.timestampMillis }
             )
             .take(boundedLimit)
+        val agentSummary = synthesizeMemoryFindings(
+            settings = settings,
+            assistant = assistant,
+            query = trimmedQuery,
+            timeRange = parsedTimeRange,
+            results = results,
+        )
 
         buildJsonObject {
             put("query", trimmedQuery)
             put("source", "memory_search")
-            put("queries", JsonArray(listOf(JsonPrimitive(trimmedQuery))))
-            put("scope", "entries_documents_digests_graph_and_current_character_past_chats")
+            put("queries", JsonArray(recallQueries.map { JsonPrimitive(it.text) }))
+            put("scope", "core_memories_and_current_character_past_chats")
             parsedTimeRange?.let { put("time_filter", it.label) }
-            put("summary", buildOverallSummary(results))
+            put("summary", agentSummary ?: buildOverallSummary(results))
             put("confidence", JsonPrimitive(results.maxOfOrNull { it.confidence } ?: 0f))
             put("results", JsonArray(results.map { it.toJson() }))
             put("note", "These are approximate memory search results. Time labels are intentionally fuzzy.")
+            if (warnings.isNotEmpty()) {
+                put("warnings", JsonArray(warnings.map(::JsonPrimitive)))
+            }
+        }
+    }
+
+    private suspend fun searchTemporalMemories(
+        assistant: Assistant,
+        queries: List<MemoryRecallSearchQuery>,
+        limit: Int,
+        timeRange: MemorySearchTimeRange?,
+    ): List<RecallResult> {
+        val query = queries.joinToString(" ") { it.text }.take(1_500)
+        val packet = temporalMemoryRepository.recall(
+            assistantId = assistant.id.toString(),
+            query = query,
+            limit = limit,
+            timeStart = timeRange?.startMillis,
+            timeEnd = timeRange?.endMillis,
+            rerankMode = assistant.memoryRerankMode,
+            rerankModelId = assistant.memoryRerankModelId,
+            minimumRelevance = 0.2f,
+            includeCore = true,
+            includeEpisodes = true,
+            includePastChats = true,
+        )
+        return packet.items.map { item ->
+            RecallResult(
+                source = when (item.kind) {
+                    RecallKind.EPISODE -> "episode"
+                    RecallKind.PAST_CHAT -> "past_chat"
+                    RecallKind.HISTORICAL_FACT -> "historical_memory"
+                    RecallKind.CURRENT_STATE -> "current_memory"
+                    RecallKind.LEGACY -> "core_memory"
+                },
+                id = item.stableId,
+                summary = item.text,
+                content = item.text,
+                timestampMillis = item.timestamp,
+                confidence = when (item.kind) {
+                    RecallKind.PAST_CHAT -> item.score.coerceIn(0f, 0.95f)
+                    else -> minOf(item.confidence, (0.25f + item.score * 0.7f).coerceIn(0f, 0.95f))
+                },
+                score = (item.score * 100).toInt(),
+            )
         }
     }
 
@@ -560,7 +672,7 @@ class MemorySearchService(
         limit: Int,
         timeRange: MemorySearchTimeRange?,
     ): List<ConversationRecallSpan> {
-        if (queries.isEmpty()) return emptyList()
+        if (queries.isEmpty() && timeRange == null) return emptyList()
         val merged = linkedMapOf<String, ConversationRecallSpan>()
         return conversationRepository
             .getConversationsOfAssistant(assistant.id)
@@ -568,23 +680,31 @@ class MemorySearchService(
             .asSequence()
             .filter { it.id != activeConversationId }
             .onEach { conversation ->
-                queries.forEachIndexed { queryIndex, recallQuery ->
-                    runCatching {
-                        findConversationRecallSpans(
-                            conversation = conversation,
-                            query = recallQuery.text,
-                            maxSpans = 2,
-                            timeRange = timeRange,
-                        )
-                    }.getOrElse { throwable ->
-                        if (throwable is CancellationException) throw throwable
-                        emptyList()
-                    }.forEach { span ->
-                        val key = "${span.conversationId}:${span.messageIndex}"
-                        val adjusted = span.copy(score = (span.score + 2 - queryIndex.coerceAtMost(2)).coerceAtLeast(1))
-                        val existing = merged[key]
-                        if (existing == null || adjusted.score > existing.score) {
-                            merged[key] = adjusted
+                if (timeRange != null) {
+                    findConversationTimeSpans(
+                        conversation = conversation,
+                        timeRange = timeRange,
+                    ).forEach { span ->
+                        merged["${span.conversationId}:${span.messageIndex}"] = span
+                    }
+                } else {
+                    queries.forEachIndexed { queryIndex, recallQuery ->
+                        runCatching {
+                            findConversationRecallSpans(
+                                conversation = conversation,
+                                query = recallQuery.text,
+                                maxSpans = 2,
+                            )
+                        }.getOrElse { throwable ->
+                            if (throwable is CancellationException) throw throwable
+                            emptyList()
+                        }.forEach { span ->
+                            val key = "${span.conversationId}:${span.messageIndex}"
+                            val adjusted = span.copy(score = (span.score + 2 - queryIndex.coerceAtMost(2)).coerceAtLeast(1))
+                            val existing = merged[key]
+                            if (existing == null || adjusted.score > existing.score) {
+                                merged[key] = adjusted
+                            }
                         }
                     }
                 }
@@ -653,6 +773,54 @@ class MemorySearchService(
         }
     }
 
+    private suspend fun selectTimeWindowSpans(
+        settings: Settings,
+        assistant: Assistant,
+        query: String,
+        timeRange: MemorySearchTimeRange,
+        candidates: List<ConversationRecallSpan>,
+        limit: Int,
+    ): List<ConversationRecallSpan> {
+        if (candidates.size <= limit) return candidates
+        val (model, provider) = resolveSubagentModel(settings, assistant)
+            ?: return candidates.take(limit)
+        val providerHandler = providerManager.getProviderByType(provider)
+        val byId = candidates.mapIndexed { index, span -> "T$index" to span }.toMap()
+        val prompt = buildString {
+            append("Select the most useful and representative transcript segments for answering a memory question.\n")
+            append("The segments are already restricted to the correct time interval; do not require query words or time words to appear in them.\n")
+            append("For broad questions about what happened, cover distinct topics and conversations. For specific questions, use meaning and context.\n")
+            append("Return only segment ids, best first, one per line. Select at most $limit.\n")
+            append("Question: $query\nTime interval: ${timeRange.label}\n\n")
+            byId.forEach { (id, span) ->
+                append(id).append(" | ")
+                append(span.conversationTitle.ifBlank { "Untitled chat" }).append(" | ")
+                append(buildFallbackRecallSummary(span, limit = 1_200)).append("\n\n")
+            }
+        }
+        val rankedIds = runCatching {
+            val response = providerHandler.generateText(
+                providerSetting = provider,
+                messages = listOf(UIMessage.user(prompt)),
+                params = settings.buildSubagentGenerationParams(model = model, temperature = 0f),
+            )
+            val text = response.choices.firstOrNull()?.message?.toContentText().orEmpty()
+            Regex("""T\d+""").findAll(text)
+                .map { it.value }
+                .distinct()
+                .filter { it in byId }
+                .take(limit)
+                .toList()
+        }.getOrElse { throwable ->
+            if (throwable is CancellationException) throw throwable
+            emptyList()
+        }
+        if (rankedIds.isEmpty()) return candidates.take(limit)
+        return (rankedIds.mapNotNull(byId::get) + candidates)
+            .distinctBy { "${it.conversationId}:${it.messageIndex}" }
+            .take(limit)
+    }
+
     private suspend fun summarizeChatSpan(
         settings: Settings,
         assistant: Assistant,
@@ -710,7 +878,7 @@ class MemorySearchService(
                     result.title?.let { append(", title=$it") }
                     append(", time=${fuzzyMemoryAgeLabel(result.timestampMillis)}")
                     append(", confidence=${"%.2f".format(result.confidence)}")
-                    append("\nsummary: ${result.summary.take(700)}")
+                    append("\nevidence: ${result.content.take(1_800)}")
                     result.matchedText?.takeIf { it.isNotBlank() }?.let {
                         append("\nmatched: ${it.take(400)}")
                     }
@@ -725,10 +893,13 @@ class MemorySearchService(
 
             Rules:
             - Use only the provided findings. Do not invent a memory.
+            - A time filter selects the evidence window. Do not expect words such as "yesterday" or "last week" to appear inside the conversation.
+            - When time-filtered past-chat evidence is present, interpret what the participants actually discussed and answer the query from that transcript.
             - If nothing clearly matches, say that no clear memory was found, then mention any nearby/useful clue only if the findings actually support it.
             - Prefer stable facts, exact measurements, names, preferences, plans, and emotionally important events.
             - Keep it concise: 1-4 short sentences.
             - Use fuzzy time language, not exact timestamps.
+            - Write a natural recollection. Do not discuss search mechanics, candidates, findings, indexes, or retrieval failures.
 
             Findings:
             $findingsText
@@ -804,8 +975,6 @@ class MemorySearchService(
         val matchedText: String? = null,
         val matchedQuery: String? = null,
         val score: Int? = null,
-        val conversationId: String? = null,
-        val messageId: String? = null,
     ) {
         fun toJson(): JsonObject = buildJsonObject {
             put("source", source)
@@ -818,8 +987,6 @@ class MemorySearchService(
             put("time_ago", fuzzyMemoryAgeLabel(timestampMillis))
             put("confidence", JsonPrimitive(confidence))
             score?.let { put("score", JsonPrimitive(it)) }
-            conversationId?.let { put("conversation_id", it) }
-            messageId?.let { put("message_id", it) }
         }
     }
 }

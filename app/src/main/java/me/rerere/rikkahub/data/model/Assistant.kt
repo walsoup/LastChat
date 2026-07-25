@@ -1,7 +1,7 @@
 package me.rerere.rikkahub.data.model
 
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.ui.UIMessage
@@ -57,13 +57,6 @@ data class Assistant(
     val summarizerModelId: Uuid? = null, // Legacy import field; global summarizer lives in Settings
     val streamOutput: Boolean = true,
     val enableMemory: Boolean = false,
-    /** Existing serialized assistants default to the legacy entry store. Creation flows opt into documents. */
-    val memorySystem: MemorySystemType = MemorySystemType.ENTRY_BASED,
-    val entryRecentContinuityEnabled: Boolean = false,
-    val entryAdvancedMemoryEnabled: Boolean = false,
-    val entryMemorySearchToolEnabled: Boolean = false,
-    val userProfileCharLimit: Int = DEFAULT_MEMORY_DOCUMENT_CHAR_LIMIT,
-    val characterMemoryCharLimit: Int = DEFAULT_MEMORY_DOCUMENT_CHAR_LIMIT,
     val enableMemorySearchTool: Boolean = false, // Allow the assistant to deliberately search memories and past chats
     val useRagMemoryRetrieval: Boolean = true, // If true, use vector-based RAG. If false, inject all memories
     val ragSimilarityThreshold: Float = 0.45f, // Similarity threshold for RAG (0.0 = include all, 1.0 = only perfect matches)
@@ -73,6 +66,9 @@ data class Assistant(
     val ragIncludeCore: Boolean = true, // Include core memories in RAG
     val enableRagLogging: Boolean = false, // Enable detailed RAG logging
     val enableMemoryConsolidation: Boolean = false, // Enable episodic memory creation from chats (requires RAG)
+    val memoryMode: AssistantMemoryMode? = null, // null preserves pre-v39 boolean combinations
+    val memoryRerankMode: MemoryRerankMode = MemoryRerankMode.AUTOMATIC,
+    val memoryRerankModelId: Uuid? = null,
     val notificationStartHour: Int = 7, // Hour when spontaneous messages can start (0-23)
     val notificationEndHour: Int = 22, // Hour when spontaneous messages must stop (0-23)
     val notificationFrequencyHours: Int = 4, // Minimum hours between spontaneous messages
@@ -100,6 +96,7 @@ data class Assistant(
     val learningMode: Boolean = false,
     val enabledLorebookIds: Set<Uuid> = emptySet(), // Lorebooks enabled for this assistant
     val enabledSkillIds: Set<Uuid> = emptySet(), // Skills enabled for this assistant
+    val enableAutomaticSkillInvocation: Boolean = true, // Let the model discover and activate otherwise unselected skills
 
     // Context Management Settings
     val maxHistoryMessages: Int? = null, // null = unlimited (use token budgeting only)
@@ -121,45 +118,58 @@ data class Assistant(
 )
 
 @Serializable
-enum class MemorySystemType {
-    @SerialName("entry_based")
-    ENTRY_BASED,
-    @SerialName("document_based")
-    DOCUMENT_BASED,
+enum class AssistantMemoryMode {
+    OFF,
+    BASIC,
+    SEARCHABLE,
+    ADAPTIVE,
 }
 
 @Serializable
-enum class MemoryDocumentKind {
-    @SerialName("user_profile")
-    USER_PROFILE,
-    @SerialName("character_memory")
-    CHARACTER_MEMORY,
+enum class MemoryRerankMode {
+    AUTOMATIC,
+    OFF,
+    LOCAL,
+    SELECTED_MODEL,
 }
 
-const val DEFAULT_MEMORY_DOCUMENT_CHAR_LIMIT = 3_000
-const val MIN_MEMORY_DOCUMENT_CHAR_LIMIT = 1_500
-const val MAX_MEMORY_DOCUMENT_CHAR_LIMIT = 6_000
+fun Assistant.resolvedMemoryMode(): AssistantMemoryMode = memoryMode ?: when {
+    !enableMemory -> AssistantMemoryMode.OFF
+    enableMemoryConsolidation -> AssistantMemoryMode.ADAPTIVE
+    useRagMemoryRetrieval || enableRecentChatsReference -> AssistantMemoryMode.SEARCHABLE
+    else -> AssistantMemoryMode.BASIC
+}
 
-fun Assistant.effectiveRecentContinuityEnabled(): Boolean =
-    memorySystem == MemorySystemType.DOCUMENT_BASED || entryAdvancedMemoryEnabled ||
-        entryRecentContinuityEnabled || enableRecentChatsReference
-
-fun Assistant.effectiveAdvancedEntryMemoryEnabled(): Boolean =
-    memorySystem == MemorySystemType.ENTRY_BASED &&
-        (entryAdvancedMemoryEnabled || enableMemoryConsolidation)
-
-fun Assistant.effectiveMemorySearchToolEnabled(): Boolean =
-    enableMemory && (
-        memorySystem == MemorySystemType.DOCUMENT_BASED ||
-            effectiveAdvancedEntryMemoryEnabled() ||
-            entryMemorySearchToolEnabled ||
-            enableMemorySearchTool
-        )
-
-fun Assistant.effectiveRagMemoryEnabled(): Boolean =
-    memorySystem == MemorySystemType.DOCUMENT_BASED ||
-        effectiveAdvancedEntryMemoryEnabled() ||
-        useRagMemoryRetrieval
+fun Assistant.withMemoryMode(mode: AssistantMemoryMode): Assistant = when (mode) {
+    AssistantMemoryMode.OFF -> copy(
+        memoryMode = mode,
+        enableMemory = false,
+        enableMemoryConsolidation = false,
+    )
+    AssistantMemoryMode.BASIC -> copy(
+        memoryMode = mode,
+        enableMemory = true,
+        useRagMemoryRetrieval = false,
+        enableRecentChatsReference = false,
+        enableMemoryConsolidation = false,
+    )
+    AssistantMemoryMode.SEARCHABLE -> copy(
+        memoryMode = mode,
+        enableMemory = true,
+        useRagMemoryRetrieval = true,
+        enableRecentChatsReference = true,
+        enableMemoryConsolidation = false,
+        enableTimeAwareness = true,
+    )
+    AssistantMemoryMode.ADAPTIVE -> copy(
+        memoryMode = mode,
+        enableMemory = true,
+        useRagMemoryRetrieval = true,
+        enableRecentChatsReference = true,
+        enableMemoryConsolidation = true,
+        enableTimeAwareness = true,
+    )
+}
 
 internal const val DEFAULT_AUTO_SUMMARY_HISTORY_LIMIT = 10
 
@@ -197,12 +207,9 @@ data class AssistantMemory(
     val embeddingModelId: String? = null, // UUID of the embedding model used (for model mismatch detection)
     val timestamp: Long = 0L, // Timestamp of the memory (e.g. creation time or episode start time)
     val significance: Int? = null, // Significance score (1-10) for episodic memories, null for core memories
-    // Typed source metadata is appended for backwards-compatible deserialization of old bundles.
-    val sourceId: String? = null,
-    val sourceKind: String? = null,
-    val sourceTitle: String? = null,
-    val conversationId: String? = null,
-    val messageId: String? = null,
+    val stableId: String? = null,
+    val sourceConversationId: String? = null,
+    val sourceMessageId: String? = null,
 )
 
 @Serializable

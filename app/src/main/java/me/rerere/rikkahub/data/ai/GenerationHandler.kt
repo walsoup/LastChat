@@ -16,7 +16,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -65,10 +64,6 @@ import me.rerere.rikkahub.data.model.withoutSkillSelectionOverride
 import me.rerere.rikkahub.data.repository.ChatAttachmentRepository
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
-import me.rerere.rikkahub.data.repository.HybridMemoryRepository
-import me.rerere.rikkahub.data.model.MemoryDocumentKind
-import me.rerere.rikkahub.data.model.MemorySystemType
-import me.rerere.rikkahub.data.model.effectiveMemorySearchToolEnabled
 import me.rerere.rikkahub.utils.applyPlaceholders
 import me.rerere.rikkahub.utils.SkillExportImport
 import java.io.File
@@ -116,7 +111,7 @@ private fun extractInjectedImageParts(
 }
 
 internal fun shouldRegisterMemorySearchTool(assistant: Assistant): Boolean {
-    return assistant.effectiveMemorySearchToolEnabled()
+    return assistant.enableMemory && assistant.enableMemorySearchTool
 }
 private const val SKILL_REASON_ASSISTANT = "Enabled for assistant"
 private const val SKILL_REASON_CONVERSATION = "Enabled for chat"
@@ -312,9 +307,10 @@ internal fun buildUsedModes(
 internal fun createSkillManagementTool(
     state: SkillToolState,
     currentTurnScopedSkillIds: Set<Uuid>,
+    automaticInvocationEnabled: Boolean = true,
     onUpdateTurnScopedSkillIds: suspend (Set<Uuid>) -> Unit,
 ): Tool? {
-    if (state.availableSkills.isEmpty()) {
+    if (!automaticInvocationEnabled || state.availableSkills.isEmpty()) {
         return null
     }
 
@@ -345,16 +341,21 @@ internal fun createSkillManagementTool(
             .ifBlank { "No description provided." }
             .replace('\n', ' ')
             .trim()
-            .take(160)
+            .take(120)
         return skill.compatibility
             ?.takeIf { it.isNotBlank() }
-            ?.let { "$description (Requires: ${it.replace('\n', ' ').take(120)})" }
+            ?.let { "$description (Requires: ${it.replace('\n', ' ').take(64)})" }
             ?: description
+    }
+
+    val availableSkillSummary = state.availableSkills.joinToString("; ") { skill ->
+        val label = skill.name.ifBlank { skill.id.toString() }
+        "$label: ${summarizeSkill(skill)}"
     }
 
     return Tool(
         name = SKILL_MANAGEMENT_TOOL_NAME,
-        description = "Activate available skills for the current assistant turn only.",
+        description = "Activate relevant skills for this turn; their full instructions load on the next step. Available: $availableSkillSummary",
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {
@@ -365,35 +366,9 @@ internal fun createSkillManagementTool(
                             put("type", "string")
                         })
                     })
-                    put("skill", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Single skill to activate for this turn, referenced by exact id or exact skill name.")
-                    })
                 },
-                required = emptyList(),
+                required = listOf("skills"),
             )
-        },
-        systemPrompt = { _, _ ->
-            buildString {
-                appendLine("## Skill Management")
-                appendLine("Use `manage_skills` only when one of the available skills is clearly needed for the current user request. Activating a skill loads its full SKILL.md instructions and exposes its package directory.")
-                appendLine("Activations only apply to this assistant turn.")
-                appendLine()
-                appendLine(
-                    if (state.activeSkills.isEmpty()) {
-                        "Currently active skills: none"
-                    } else {
-                        "Currently active skills: ${state.activeSkills.joinToString(", ") { skill -> skill.name.ifBlank { skill.id.toString() } }}"
-                    }
-                )
-                appendLine("Available skills:")
-                append(
-                    state.availableSkills.joinToString("\n") { skill ->
-                        val label = skill.name.ifBlank { skill.id.toString() }
-                        "- $label: ${summarizeSkill(skill)}"
-                    }
-                )
-            }
         },
         execute = { args ->
             val targets = parseTargets(args)
@@ -478,7 +453,6 @@ class GenerationHandler(
     private val aiLoggingManager: AILoggingManager,
     private val embeddingService: me.rerere.rikkahub.data.ai.rag.EmbeddingService,
     private val memorySearchService: MemorySearchService,
-    private val hybridMemoryRepository: HybridMemoryRepository,
     private val runtimeInfo: GenerationRuntimeInfo = AndroidGenerationRuntimeInfo(),
 ) {
     fun generateText(
@@ -495,12 +469,13 @@ class GenerationHandler(
         enabledModeIds: Set<Uuid> = emptySet(),
         enabledLorebookIds: Set<Uuid>? = null,
         activeConversationId: Uuid? = null,
+        contextSummary: String? = null,
     ): Flow<GenerationChunk> = channelFlow {
         // Older app-created skills predate package storage. Materialize their
         // canonical SKILL.md before a workspace starts so resource paths in the
         // prompt always point to a real package.
         settings.skills.forEach { skill ->
-            runCatching { SkillExportImport.syncManagedSkill(context, skill) }
+            runCatching { SkillExportImport.ensureManagedSkillPackage(context, skill) }
                 .onFailure { Log.w(TAG, "Could not sync skill package ${skill.name}", it) }
         }
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
@@ -518,7 +493,6 @@ class GenerationHandler(
             .let { assistant.enabledSkillIds.intersect(it) }
         val conversationSkillIds = enabledModeIds
         var currentTurnScopedSkillIds = emptySet<Uuid>()
-        val searchedMemorySources = mutableListOf<me.rerere.ai.ui.UsedMemory>()
 
         for (stepIndex in 0 until maxSteps) {
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
@@ -527,76 +501,30 @@ class GenerationHandler(
                 Log.i(TAG, "generateInternal: build tools($assistant)")
                 // Add memory tools if memory is enabled for this assistant
                 if (assistant.enableMemory) {
-                    val configuredMemoryTools = buildMemoryTools(
+                    buildMemoryTools(
                         onCreation = { content ->
-                            memoryRepo.addMemory(assistant.id.toString(), content).also {
-                                hybridMemoryRepository.indexEntry(assistant.id.toString(), it)
-                            }
+                            memoryRepo.addMemory(assistant.id.toString(), content)
                         },
                         onUpdate = { id, content ->
-                            memoryRepo.updateContent(id, content).also {
-                                hybridMemoryRepository.indexEntry(assistant.id.toString(), it)
-                            }
+                            memoryRepo.updateContent(id, content)
                         },
                         onDelete = { id ->
                             memoryRepo.deleteMemory(id)
-                            hybridMemoryRepository.deleteIndexedSource(me.rerere.rikkahub.data.model.MemorySourceKind.ENTRY, id.toString())
                         },
                         onSearch = if (shouldRegisterMemorySearchTool(assistant)) {
-                            { query, limit, timeRange, sourceTypes, speaker, entity, conversationId, frame ->
+                            { query, limit, timeRange ->
                                 memorySearchService.searchMemory(
                                     assistant = assistant,
                                     activeConversationId = activeConversationId,
                                     query = query,
                                     limit = limit,
                                     timeRange = timeRange,
-                                    sourceTypes = sourceTypes,
-                                    speaker = speaker,
-                                    entity = entity,
-                                    conversationId = conversationId,
-                                    frame = frame,
-                                ).also { result ->
-                                    (result["results"] as? JsonArray).orEmpty().mapNotNull { item ->
-                                        val obj = item as? JsonObject ?: return@mapNotNull null
-                                        val source = obj["source"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                                        val sourceId = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                                        val content = obj["summary"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                                        val kind = when (source) {
-                                            "entry", "core_memory" -> "ENTRY"
-                                            "user_profile" -> "USER_PROFILE"
-                                            "character_memory" -> "CHARACTER_MEMORY"
-                                            "continuity_digest" -> "CONTINUITY_DIGEST"
-                                            "graph_node" -> "GRAPH_NODE"
-                                            "graph_relation" -> "GRAPH_RELATION"
-                                            else -> "RAW_CHAT"
-                                        }
-                                        me.rerere.ai.ui.UsedMemory(
-                                            memoryId = sourceId.toIntOrNull() ?: sourceId.hashCode(),
-                                            memoryContent = content.take(100),
-                                            memoryType = if (kind == "ENTRY") 0 else 1,
-                                            activationReason = "Returned by memory search",
-                                            sourceId = sourceId,
-                                            sourceKind = kind,
-                                            title = obj["conversation_title"]?.jsonPrimitive?.contentOrNull,
-                                            conversationId = obj["conversation_id"]?.jsonPrimitive?.contentOrNull,
-                                            messageId = obj["message_id"]?.jsonPrimitive?.contentOrNull,
-                                        )
-                                    }.forEach { source ->
-                                        searchedMemorySources.removeAll { it.sourceId == source.sourceId && it.sourceKind == source.sourceKind }
-                                        searchedMemorySources += source
-                                    }
-                                }
+                                )
                             }
                         } else {
                             null
                         }
-                    )
-                    if (assistant.memorySystem == MemorySystemType.DOCUMENT_BASED) {
-                        addAll(configuredMemoryTools.filter { it.name == MEMORY_SEARCH_TOOL_NAME })
-                        add(createDocumentMemoryUpdateTool(assistant))
-                    } else {
-                        addAll(configuredMemoryTools)
-                    }
+                    ).let(this::addAll)
                 }
                 createSkillManagementTool(
                     state = buildSkillToolState(
@@ -607,6 +535,8 @@ class GenerationHandler(
                         turnScopedSkillIds = currentTurnScopedSkillIds,
                     ),
                     currentTurnScopedSkillIds = currentTurnScopedSkillIds,
+                    automaticInvocationEnabled = assistant.enableAutomaticSkillInvocation &&
+                        model.abilities.contains(ModelAbility.TOOL),
                     onUpdateTurnScopedSkillIds = { updatedIds ->
                         currentTurnScopedSkillIds = updatedIds.intersect(allSkillIds)
                     },
@@ -648,7 +578,7 @@ class GenerationHandler(
                 turnScopedEnabledModeIds = currentTurnScopedSkillIds,
                 conversationEnabledLorebookIds = enabledLorebookIds,
                 activeConversationId = activeConversationId,
-                extraUsedMemories = searchedMemorySources,
+                contextSummary = contextSummary,
             )
             messages = messages.visualTransforms(
                 transformers = outputTransformers,
@@ -775,6 +705,8 @@ class GenerationHandler(
         conversationEnabledModeIds: Set<Uuid> = emptySet(),
         turnScopedEnabledModeIds: Set<Uuid> = emptySet(),
         conversationEnabledLorebookIds: Set<Uuid>? = null,
+        activeConversationId: Uuid? = null,
+        contextSummary: String? = null,
     ): BuildMessagesResult {
         // Token estimator (rough estimate: 4 chars per token)
         fun estimateTokens(text: String) = text.length / 4
@@ -1069,9 +1001,33 @@ class GenerationHandler(
         // Chat History (reverse order to prioritize recent)
         val chatHistoryCandidates = imageArchivedMessages.truncate(truncateIndex).reversed()
         
-        // Memory continuity is supplied by the central chat context path as source-backed digests.
+        // Memories (Prepare effective memories including recent chats if enabled)
         val effectiveMemoriesCandidates = if (assistant.enableMemory) {
-            memories.distinctBy { it.sourceId ?: it.content }
+            val recentChatMemories = if (assistant.enableRecentChatsReference && messages.size <= 2) {
+                val recentConversations = conversationRepo.getRecentConversations(
+                    assistantId = assistant.id,
+                    // The active conversation is normally the newest result, so fetch one
+                    // extra before excluding it to retain up to three prior conversations.
+                    limit = 4,
+                ).filter { conversation ->
+                    conversation.id != activeConversationId &&
+                        conversation.title.isNotBlank() &&
+                        runtimeInfo.isToday(conversation.updateAt)
+                }.take(3)
+                recentConversations.map { conversation ->
+                    AssistantMemory(
+                        id = -1,
+                        content = "Participated in conversation: ${conversation.title}",
+                        type = 1,
+                        timestamp = conversation.updateAt.toEpochMilli(),
+                        stableId = "conversation:${conversation.id}",
+                        sourceConversationId = conversation.id.toString(),
+                    )
+                }
+            } else {
+                emptyList()
+            }
+            (memories + recentChatMemories).distinctBy { it.content } // Avoid duplicates
         } else {
             emptyList()
         }
@@ -1223,7 +1179,6 @@ class GenerationHandler(
             fullMessages = messages,
             retainedMessages = orderedSelectedMessages
         )
-
         val builtMessages = buildList {
             if (baseSystemPrompt.isNotBlank()) {
                 add(UIMessage.system(baseSystemPrompt))
@@ -1239,6 +1194,9 @@ class GenerationHandler(
             topOfChatSkills.forEach { add(skillMessage(it)) }
             
             val dynamicContext = buildList {
+                if (!contextSummary.isNullOrBlank()) {
+                    add("[Conversation Summary (Earlier context)]:\n$contextSummary")
+                }
                 if (selectedMemories.isNotEmpty()) {
                     add(buildMemoryPrompt(model, selectedMemories))
                 }
@@ -1300,11 +1258,9 @@ class GenerationHandler(
                 memoryType = memory.type,
                 priority = selectedMemories.size - index,  // Higher priority for earlier memories
                 activationReason = reason,
-                sourceId = memory.sourceId ?: memory.id.toString(),
-                sourceKind = memory.sourceKind ?: if (memory.type == 1) "CONTINUITY_DIGEST" else "ENTRY",
-                title = memory.sourceTitle,
-                conversationId = memory.conversationId,
-                messageId = memory.messageId,
+                stableId = memory.stableId,
+                sourceConversationId = memory.sourceConversationId,
+                sourceMessageId = memory.sourceMessageId,
             )
         }
         
@@ -1383,7 +1339,7 @@ class GenerationHandler(
         turnScopedEnabledModeIds: Set<Uuid> = emptySet(),
         conversationEnabledLorebookIds: Set<Uuid>? = null,
         activeConversationId: Uuid? = null,
-        extraUsedMemories: List<me.rerere.ai.ui.UsedMemory> = emptyList(),
+        contextSummary: String? = null,
     ) {
         val buildResult = buildMessages(
             assistant = assistant,
@@ -1396,8 +1352,23 @@ class GenerationHandler(
             conversationEnabledModeIds = conversationEnabledModeIds,
             turnScopedEnabledModeIds = turnScopedEnabledModeIds,
             conversationEnabledLorebookIds = conversationEnabledLorebookIds,
+            activeConversationId = activeConversationId,
+            contextSummary = contextSummary,
         )
-        var uiMessages = messages
+        val usedLorebookEntries = buildResult.activatedLorebookEntries
+        val usedModes = buildResult.usedModes
+        val usedMemories = buildResult.usedMemories
+        val hasContextSources = usedLorebookEntries.isNotEmpty() || usedModes.isNotEmpty() || usedMemories.isNotEmpty()
+        var uiMessages = if (hasContextSources) {
+            messages.attachUsedContext(usedLorebookEntries, usedModes, usedMemories)
+        } else {
+            messages
+        }
+        if (uiMessages != messages) {
+            // Publish the context stack as soon as prompt assembly finishes instead of waiting
+            // for the provider stream to complete.
+            onUpdateMessages(uiMessages)
+        }
         val transformedInput = buildResult.messages.transformInput(
             transformers = transformers,
             context = context,
@@ -1412,11 +1383,6 @@ class GenerationHandler(
             },
         )
         val internalMessages = transformedInput.messages
-        val usedLorebookEntries = buildResult.activatedLorebookEntries
-        val usedModes = buildResult.usedModes
-        val usedMemories = (buildResult.usedMemories + extraUsedMemories)
-            .distinctBy { "${it.sourceKind}:${it.sourceId ?: it.memoryId}" }
-        val hasContextSources = usedLorebookEntries.isNotEmpty() || usedModes.isNotEmpty() || usedMemories.isNotEmpty()
 
         var messages: List<UIMessage> = uiMessages
         if (transformedInput.annotations.isNotEmpty()) {
@@ -1477,17 +1443,7 @@ class GenerationHandler(
             }
             // Attach all context sources to the last assistant message after streaming completes
             if (hasContextSources) {
-                messages = messages.mapIndexed { index, message ->
-                    if (index == messages.lastIndex && message.role == me.rerere.ai.core.MessageRole.ASSISTANT) {
-                        message.copy(
-                            usedLorebookEntries = usedLorebookEntries.ifEmpty { null },
-                            usedModes = usedModes.ifEmpty { null },
-                            usedMemories = usedMemories.ifEmpty { null }
-                        )
-                    } else {
-                        message
-                    }
-                }
+                messages = messages.attachUsedContext(usedLorebookEntries, usedModes, usedMemories)
                 onUpdateMessages(messages)
             }
         } else {
@@ -1516,17 +1472,7 @@ class GenerationHandler(
             }
             // Attach all context sources to the last assistant message
             if (hasContextSources) {
-                messages = messages.mapIndexed { index, message ->
-                    if (index == messages.lastIndex && message.role == me.rerere.ai.core.MessageRole.ASSISTANT) {
-                        message.copy(
-                            usedLorebookEntries = usedLorebookEntries.ifEmpty { null },
-                            usedModes = usedModes.ifEmpty { null },
-                            usedMemories = usedMemories.ifEmpty { null }
-                        )
-                    } else {
-                        message
-                    }
-                }
+                messages = messages.attachUsedContext(usedLorebookEntries, usedModes, usedMemories)
             }
             onUpdateMessages(messages)
         }
@@ -1547,11 +1493,31 @@ class GenerationHandler(
         }
     }
 
+    private fun List<UIMessage>.attachUsedContext(
+        usedLorebookEntries: List<me.rerere.ai.ui.UsedLorebookEntry>,
+        usedModes: List<me.rerere.ai.ui.UsedMode>,
+        usedMemories: List<me.rerere.ai.ui.UsedMemory>,
+    ): List<UIMessage> {
+        val assistantIndex = indexOfLast { it.role == MessageRole.ASSISTANT }
+        if (assistantIndex < 0) return this
+        return mapIndexed { index, message ->
+            if (index == assistantIndex) {
+                message.copy(
+                    usedLorebookEntries = usedLorebookEntries.ifEmpty { null },
+                    usedModes = usedModes.ifEmpty { null },
+                    usedMemories = usedMemories.ifEmpty { null },
+                )
+            } else {
+                message
+            }
+        }
+    }
+
     private fun buildMemoryTools(
         onCreation: suspend (String) -> AssistantMemory,
         onUpdate: suspend (Int, String) -> AssistantMemory,
         onDelete: suspend (Int) -> Unit,
-        onSearch: (suspend (String, Int, String?, Set<String>, String?, String?, String?, String?) -> JsonElement)? = null,
+        onSearch: (suspend (String, Int, String?) -> JsonElement)? = null,
     ) = buildList {
         add(Tool(
             name = "create_memory",
@@ -1666,15 +1632,6 @@ class GenerationHandler(
                                 put("type", "string")
                                 put("description", "Optional rough time span to filter recall, such as last week, this month, last month, 4 months ago, or yesterday.")
                             })
-                            put("source_types", buildJsonObject {
-                                put("type", "array")
-                                put("items", buildJsonObject { put("type", "string") })
-                                put("description", "Optional source kinds: entry, user_profile, character_memory, continuity_digest, graph_node, graph_relation, raw_chat.")
-                            })
-                            put("speaker", buildJsonObject { put("type", "string") })
-                            put("entity", buildJsonObject { put("type", "string") })
-                            put("conversation_id", buildJsonObject { put("type", "string") })
-                            put("frame", buildJsonObject { put("type", "string"); put("description", "Optional reality/frame filter, such as real, fictional, dream, roleplay, or hypothetical.") })
                         },
                         required = listOf("query")
                     )
@@ -1698,66 +1655,11 @@ class GenerationHandler(
                     val query = params["query"]?.jsonPrimitive?.contentOrNull ?: error("query is required")
                     val limit = params["limit"]?.jsonPrimitive?.intOrNull ?: 5
                     val timeRange = params["time_range"]?.jsonPrimitive?.contentOrNull
-                    val sourceTypes = (params["source_types"] as? JsonArray).orEmpty()
-                        .mapNotNull { item -> item.jsonPrimitive.contentOrNull }.toSet()
-                    val speaker = params["speaker"]?.jsonPrimitive?.contentOrNull
-                    val entity = params["entity"]?.jsonPrimitive?.contentOrNull
-                    val conversationId = params["conversation_id"]?.jsonPrimitive?.contentOrNull
-                    val frame = params["frame"]?.jsonPrimitive?.contentOrNull
-                    onSearch(query, limit, timeRange, sourceTypes, speaker, entity, conversationId, frame)
+                    onSearch(query, limit, timeRange)
                 }
             ))
         }
     }
-
-    private fun createDocumentMemoryUpdateTool(assistant: Assistant) = Tool(
-        name = "update_memory_document",
-        description = "Replace User Profile or Character Memory when the user explicitly asks you to remember, correct, or forget something. Preserve useful existing content and stay within the configured character limit.",
-        parameters = {
-            InputSchema.Obj(
-                properties = buildJsonObject {
-                    put("target", buildJsonObject {
-                        put("type", "string")
-                        put("enum", JsonArray(listOf(JsonPrimitive("user_profile"), JsonPrimitive("character_memory"))))
-                    })
-                    put("new_content", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Complete replacement document content.")
-                    })
-                    put("expected_revision", buildJsonObject { put("type", "integer") })
-                    put("reason", buildJsonObject { put("type", "string") })
-                },
-                required = listOf("target", "new_content", "expected_revision", "reason"),
-            )
-        },
-        execute = { args ->
-            val params = args.jsonObject
-            val kind = when (params["target"]?.jsonPrimitive?.contentOrNull) {
-                "user_profile" -> MemoryDocumentKind.USER_PROFILE
-                "character_memory" -> MemoryDocumentKind.CHARACTER_MEMORY
-                else -> error("target must be user_profile or character_memory")
-            }
-            val content = params["new_content"]?.jsonPrimitive?.contentOrNull
-                ?: error("new_content is required")
-            val expectedRevision = params["expected_revision"]?.jsonPrimitive?.longOrNull
-                ?: error("expected_revision is required")
-            val reason = params["reason"]?.jsonPrimitive?.contentOrNull ?: "Updated in chat"
-            val result = hybridMemoryRepository.updateDocument(
-                assistant = assistant,
-                kind = kind,
-                content = content,
-                expectedRevision = expectedRevision,
-                reason = reason,
-                source = "tool",
-            )
-            buildJsonObject {
-                put("applied", result.applied)
-                put("revision", result.revision)
-                put("character_count", result.codePointCount)
-                result.error?.let { put("error", it) }
-            }
-        },
-    )
 
     private suspend fun buildMemoryPrompt(model: Model, memories: List<AssistantMemory>): String {
         Log.d(TAG, "buildMemoryPrompt: Injecting ${memories.size} memories into prompt")

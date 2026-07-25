@@ -8,7 +8,8 @@ import me.rerere.rikkahub.data.repository.ChatAttachmentRepository
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.GenMediaRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
-import me.rerere.rikkahub.data.repository.HybridMemoryRepository
+import me.rerere.rikkahub.data.memory.TemporalMemoryRepository
+import me.rerere.rikkahub.data.memory.MemoryReranker
 import me.rerere.workspace.ProotShellRunner
 import me.rerere.workspace.RootfsInstaller
 import me.rerere.workspace.WorkspaceBindMount
@@ -38,7 +39,7 @@ val repositoryModule = module {
     }
 
     single {
-        ConversationRepository(get(), get(), get(), get(), get(), get(), get())
+        ConversationRepository(get(), get(), get(), get(), get(), get())
     }
 
     single {
@@ -50,19 +51,15 @@ val repositoryModule = module {
     }
 
     single {
-        HybridMemoryRepository(get(), get(), get(), get(), get())
+        MemoryReranker(get(), get())
     }
 
     single {
-        MemorySearchService(get(), get(), get(), get(), get(), get())
+        TemporalMemoryRepository(get(), get(), get(), get())
     }
 
     single {
-        me.rerere.rikkahub.data.ai.MemoryConversionService(get(), get(), get())
-    }
-
-    single {
-        me.rerere.rikkahub.data.ai.MemoryContextCoordinator(get(), get())
+        MemorySearchService(get(), get(), get(), get(), get())
     }
 
     single {

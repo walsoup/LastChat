@@ -51,7 +51,7 @@ class EmbeddingService(
         check(modelId != DISABLED_MODEL_ID) {
             "Embedding model is disabled."
         }
-        
+
         val model = settings.findModelById(modelId) ?: error("Embedding model not found: $modelId")
         
         // Check if provider supports embeddings

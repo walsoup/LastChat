@@ -88,6 +88,7 @@ import me.rerere.rikkahub.ui.components.ui.ToastType
 import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.pages.setting.components.SettingsGroup
+import me.rerere.rikkahub.ui.components.settings.LastChatModelFeatureCard
 import me.rerere.rikkahub.utils.plus
 import org.koin.androidx.compose.koinViewModel
 
@@ -122,6 +123,8 @@ fun SettingModelPage(vm: SettingVM = koinViewModel()) {
                     DefaultSTTModelSetting(settings = settings, vm = vm)
                     DefaultTitleModelSetting(settings = settings, vm = vm)
                     DefaultSummarizerModelSetting(settings = settings, vm = vm)
+                    DefaultSubagentModelSetting(settings = settings, vm = vm)
+                    DefaultMemoryRerankModelSetting(settings = settings, vm = vm)
                     DefaultSuggestionModelSetting(settings = settings, vm = vm)
                 }
             }
@@ -788,6 +791,40 @@ containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceCon
 }
 
 @Composable
+private fun DefaultMemoryRerankModelSetting(
+    settings: Settings,
+    vm: SettingVM,
+) {
+    ModelFeatureCard(
+        title = { Text("Memory reranker", maxLines = 1) },
+        description = { Text("Optional model used when an assistant's recall reranking is set to Default reranker model") },
+        icon = { Icon(Icons.Rounded.Psychology, null) },
+        actions = {
+            Box(modifier = Modifier.weight(1f)) {
+                ModelSelector(
+                    modelId = settings.memoryRerankModelId,
+                    type = ModelType.CHAT,
+                    allowBackendModels = true,
+                    onSelect = { selectedModel ->
+                        vm.updateSettings(
+                            settings.copy(
+                                memoryRerankModelId = settings.findModelById(selectedModel.id)?.id
+                            )
+                        )
+                    },
+                    providers = settings.providers,
+                    allowClear = true,
+                    onClear = {
+                        vm.updateSettings(settings.copy(memoryRerankModelId = null))
+                    },
+                    modifier = Modifier.wrapContentWidth(),
+                )
+            }
+        },
+    )
+}
+
+@Composable
 private fun DefaultChatModelSetting(
     settings: Settings,
     vm: SettingVM
@@ -1116,7 +1153,7 @@ private fun HelperReasoningSettings(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(24.dp))
                 .background(
-                    color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest
                 )
                 .clickable {
                     haptics.perform(me.rerere.rikkahub.ui.hooks.HapticPattern.Pop)
@@ -1168,52 +1205,12 @@ private fun ModelFeatureCard(
     title: @Composable () -> Unit,
     actions: @Composable RowScope.() -> Unit
 ) {
-    Card(
+    LastChatModelFeatureCard(
+        darkTheme = LocalDarkMode.current,
         modifier = modifier,
-        shape = RoundedCornerShape(10.dp),
-        colors = androidx.compose.material3.CardDefaults.cardColors(
-            containerColor = if (LocalDarkMode.current) androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerLow else androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerHighest
-        )
-    ) {
-        Column(
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        icon()
-                        ProvideTextStyle(MaterialTheme.typography.titleLarge) {
-                            title()
-                        }
-                    }
-                    ProvideTextStyle(
-                        MaterialTheme.typography.bodySmall.copy(
-                            color = LocalContentColor.current.copy(
-                                alpha = 0.7f
-                            )
-                        )
-                    ) {
-                        description()
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                actions()
-            }
-        }
-    }
+        description = description,
+        icon = icon,
+        title = title,
+        actions = actions,
+    )
 }

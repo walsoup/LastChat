@@ -696,7 +696,7 @@ private fun ProviderListView(
                         },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(24.dp),
-                        color = if (LocalDarkMode.current) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest
                     ) {
                         Row(
                             modifier = Modifier
@@ -710,18 +710,21 @@ private fun ProviderListView(
                                     imageVector = Icons.Rounded.PhoneAndroid,
                                     contentDescription = null,
                                     modifier = Modifier.size(40.dp),
+                                    tint = MaterialTheme.colorScheme.onSurface,
                                 )
                             } else {
                                 AutoAIIconWithUrl(
                                     name = matchingPreset.name,
                                     customIconUri = matchingPreset.customIconUri,
-                                    modifier = Modifier.size(40.dp)
+                                    modifier = Modifier.size(40.dp),
+                                    contentColor = MaterialTheme.colorScheme.onSurface,
                                 )
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = matchingPreset.name,
-                                    style = MaterialTheme.typography.titleMedium
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                 )
                                 Text(
                                     text = matchingPreset.description,
@@ -1440,7 +1443,7 @@ containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceCon
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(24.dp),
-                                color = if (LocalDarkMode.current) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh,
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest,
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -1453,9 +1456,10 @@ containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceCon
                                         imageVector = Icons.Rounded.PhoneAndroid,
                                         contentDescription = null,
                                         modifier = Modifier.size(40.dp),
+                                        tint = MaterialTheme.colorScheme.onSurface,
                                     )
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(text = preset.name, style = MaterialTheme.typography.titleMedium)
+                                        Text(text = preset.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                                         Text(
                                             text = preset.description,
                                             style = MaterialTheme.typography.bodySmall,
@@ -1534,7 +1538,7 @@ containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceCon
                             },
                             modifier = Modifier.fillMaxWidth(),
                             shape = shape,
-                            color = if (me.rerere.rikkahub.ui.theme.LocalDarkMode.current) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest
                         ) {
                             Row(
                                 modifier = Modifier
@@ -1546,12 +1550,14 @@ containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceCon
                                 AutoAIIconWithUrl(
                                     name = preset.name,
                                     customIconUri = preset.customIconUri,
-                                    modifier = Modifier.size(40.dp)
+                                    modifier = Modifier.size(40.dp),
+                                    contentColor = MaterialTheme.colorScheme.onSurface,
                                 )
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = preset.name,
-                                        style = MaterialTheme.typography.titleMedium
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
                                     )
                                     Text(
                                         text = preset.description,
@@ -1632,11 +1638,10 @@ private fun ProviderItemContent(
     else 
         MaterialTheme.colorScheme.surfaceContainerHigh
     
-    // Disabled cards: transparent background (black in dark mode) with outline
     val disabledBackground = if (me.rerere.rikkahub.ui.theme.LocalDarkMode.current) 
-        Color.Black 
+        androidx.compose.ui.graphics.Color.Black 
     else 
-        MaterialTheme.colorScheme.surface
+        MaterialTheme.colorScheme.surfaceContainerHighest
     
     Row(
         modifier = Modifier

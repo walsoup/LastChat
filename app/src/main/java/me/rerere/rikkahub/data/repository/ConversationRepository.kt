@@ -46,7 +46,6 @@ class ConversationRepository(
     private val dailyActivityDAO: DailyActivityDAO,
     private val usageStatsDAO: UsageStatsDAO,
     private val chatAttachmentRepository: ChatAttachmentRepository,
-    private val hybridMemoryRepository: HybridMemoryRepository,
 ) {
     companion object {
         private const val TAG = "ConversationRepository"
@@ -73,6 +72,13 @@ class ConversationRepository(
         return conversationDAO.getRecentConversationsOfAssistant(
             assistantId = assistantId.toString(),
             limit = limit
+        ).map { conversationEntityToConversation(it) }
+    }
+
+    suspend fun getPendingMemoryConversations(assistantId: Uuid, limit: Int = 25): List<Conversation> {
+        return conversationDAO.getPendingMemoryConversations(
+            assistantId = assistantId.toString(),
+            limit = limit,
         ).map { conversationEntityToConversation(it) }
     }
 
@@ -250,7 +256,6 @@ class ConversationRepository(
             conversationToConversationEntity(conversation)
         )
         chatEpisodeDAO.deleteEpisodeByConversationId(conversation.id.toString())
-        hybridMemoryRepository.onConversationDeleted(conversation.id.toString())
         chatAttachmentRepository.removeConversationReferences(conversation.id)
     }
 

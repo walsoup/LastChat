@@ -220,7 +220,7 @@ private fun ModeItem(
     Surface(
         onClick = onClick,
         shape = shape,
-        color = if (isDarkMode) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh
+        color = MaterialTheme.colorScheme.surfaceContainerHighest
     ) {
         Row(
             modifier = Modifier
@@ -296,18 +296,20 @@ private fun MemoryItem(
     onClick: () -> Unit
 ) {
     val isDarkMode = LocalDarkMode.current
-    val isCore = memory.memoryType == 0
-    val memoryTypeLabel = memory.title ?: when (memory.sourceKind) {
-        "USER_PROFILE" -> "User Profile"
-        "CHARACTER_MEMORY" -> "Character Memory"
-        "CONTINUITY_DIGEST" -> "Recent continuity"
-        "GRAPH_NODE", "GRAPH_RELATION" -> "Memory graph"
-        "RAW_CHAT" -> "Chat source"
-        else -> when {
-            isCore -> stringResource(R.string.activity_timeline_memory_core)
-            memory.memoryId < 0 -> stringResource(R.string.context_sources_recent_chat)
-            else -> stringResource(R.string.activity_timeline_memory_episodic)
-        }
+    val isPastChat = memory.stableId?.startsWith("source:") == true
+    val isRecentChat = memory.stableId?.startsWith("conversation:") == true
+    val isChatReference = isPastChat || isRecentChat
+    val isProjection = memory.stableId == "projection"
+    val isTemporalEpisode = memory.stableId?.startsWith("episode:") == true
+    val isCore = memory.memoryType == 0 && !isChatReference
+    val memoryTypeLabel = when {
+        isPastChat -> "Past chat"
+        isRecentChat -> stringResource(R.string.context_sources_recent_chat)
+        isProjection -> "Current understanding"
+        isTemporalEpisode -> stringResource(R.string.activity_timeline_memory_episodic)
+        isCore -> stringResource(R.string.activity_timeline_memory_core)
+        memory.memoryId < 0 -> stringResource(R.string.context_sources_recent_chat)
+        else -> stringResource(R.string.activity_timeline_memory_episodic)
     }
     
     val backgroundColor = if (isCore) {
@@ -334,7 +336,7 @@ private fun MemoryItem(
     Surface(
         onClick = onClick,
         shape = shape,
-        color = if (isDarkMode) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh
+        color = MaterialTheme.colorScheme.surfaceContainerHighest
     ) {
         Row(
             modifier = Modifier
@@ -358,6 +360,14 @@ private fun MemoryItem(
                 contentAlignment = Alignment.Center
             ) {
                 when {
+                    isChatReference -> {
+                        Icon(
+                            imageVector = Icons.Rounded.History,
+                            contentDescription = memoryTypeLabel,
+                            modifier = Modifier.size(24.dp),
+                            tint = contentColor
+                        )
+                    }
                     isCore -> {
                         Icon(
                             imageVector = Icons.Rounded.Memory,
@@ -449,7 +459,7 @@ private fun LorebookEntryItem(
     Surface(
         onClick = onClick,
         shape = shape,
-        color = if (isDarkMode) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh
+        color = MaterialTheme.colorScheme.surfaceContainerHighest
     ) {
         Row(
             modifier = Modifier

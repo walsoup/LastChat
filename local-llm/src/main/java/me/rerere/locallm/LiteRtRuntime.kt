@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import me.rerere.common.platform.PlatformLog
 
 /** An engine that is loaded and ready, together with the model + backends it was loaded with. */
 class LoadedEngine internal constructor(
@@ -53,11 +54,15 @@ class LiteRtRuntime(
 
         disposeLocked()
 
-        when (val mem = MemoryGuard.check(context, model.sizeInBytes, kvCacheTokens, model.minDeviceMemoryGb)) {
+        when (val mem = MemoryGuard.check(context, model.sizeInBytes, model.minDeviceMemoryGb)) {
             is MemoryCheck.Insufficient -> {
                 _state.value = LocalRuntimeState.Error(model.id, "insufficient_memory")
                 throw InsufficientMemoryException(mem)
             }
+            is MemoryCheck.Advisory -> PlatformLog.w(
+                TAG,
+                "Attempting ${model.id} on ${mem.deviceMb} MB total RAM; allowlist recommends ${mem.recommendedMb} MB",
+            )
             MemoryCheck.Ok -> Unit
         }
 
@@ -161,9 +166,10 @@ class LiteRtRuntime(
     class InsufficientMemoryException(val info: MemoryCheck.Insufficient) : Exception("insufficient_memory")
 
     companion object {
+        private const val TAG = "LiteRtRuntime"
         private const val KEY_PENDING_GPU = "pending_gpu_model"
 
-        private fun resolveKvCacheSize(model: InstalledLocalModel): Int {
+        private fun requestedKvCacheSize(model: InstalledLocalModel): Int {
             val maxTokens = model.config.maxTokens ?: model.defaultConfig.maxTokens
             val userContextLength = model.config.contextLength
             val modelMaxContext = model.defaultConfig.maxContextLength
@@ -179,5 +185,11 @@ class LiteRtRuntime(
 
         private fun loadKey(model: InstalledLocalModel, backends: ResolvedBackends, kvCacheTokens: Int): String =
             listOf(model.filePath, backends.effective.name, kvCacheTokens.toString()).joinToString("|")
+    }
+
+    private fun resolveKvCacheSize(model: InstalledLocalModel): Int {
+        val requested = requestedKvCacheSize(model)
+        val safeCap = MemoryGuard.safeContextTokenCap(MemoryGuard.deviceTotalRamGb(context))
+        return minOf(requested, safeCap)
     }
 }

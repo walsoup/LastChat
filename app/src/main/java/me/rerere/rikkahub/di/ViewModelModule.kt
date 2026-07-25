@@ -49,13 +49,12 @@ val viewModelModule = module {
             id = it[0],
             settingsStore = get(),
             memoryRepository = get(),
-            hybridMemoryRepository = get(),
             conversationRepository = get(),
             context = get(),
             chatEpisodeDAO = get(),
+            temporalMemoryDao = get(),
             providerManager = get(),
             appStorageRepository = get(),
-            memoryConversionService = get(),
         )
     }
     viewModel<ShareHandlerVM> {
@@ -80,8 +79,8 @@ val viewModelModule = module {
         TextSelectionVM(
             settingsStore = get(),
             generationHandler = get(),
+            memoryRepository = get(),
             templateTransformer = get(),
-            memoryContextCoordinator = get(),
         )
     }
     viewModel<me.rerere.rikkahub.ui.activity.AssistantOverlayVM> {
@@ -99,6 +98,7 @@ val viewModelModule = module {
             runtime = get(),
             install = get(),
             embedder = get(),
+            inferenceManager = get(),
             settingsStore = get(),
             modelCatalogService = get(),
             secretKeyManager = get(),
