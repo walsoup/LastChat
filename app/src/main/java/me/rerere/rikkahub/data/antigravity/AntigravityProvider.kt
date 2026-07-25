@@ -2,10 +2,12 @@ package me.rerere.rikkahub.data.antigravity
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -24,6 +26,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
+import me.rerere.ai.provider.ProviderProxy
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.buildGoogleToolsPayload
@@ -33,7 +36,7 @@ import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.ai.util.providerIoDispatcher
+import me.rerere.common.platform.PlatformHttpProxy
 import me.rerere.common.platform.PlatformHttpRequest
 import me.rerere.common.platform.PlatformMediaEncoder
 import me.rerere.common.platform.PlatformServerEvent
@@ -49,6 +52,18 @@ import kotlin.uuid.Uuid
 private const val TAG = "AntigravityProvider"
 private const val CLOUDCODE_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
 private const val FETCH_MODELS_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+
+private fun ProviderProxy.toPlatformProxy(): PlatformHttpProxy? {
+    return when (this) {
+        ProviderProxy.None -> null
+        is ProviderProxy.Http -> PlatformHttpProxy(
+            host = address,
+            port = port,
+            username = username,
+            password = password
+        )
+    }
+}
 
 class AntigravityProvider(
     private val context: Context,
@@ -144,7 +159,7 @@ class AntigravityProvider(
         return newAccessToken to updated
     }
 
-    override suspend fun listModels(providerSetting: ProviderSetting.Antigravity): List<Model> = withContext(providerIoDispatcher) {
+    override suspend fun listModels(providerSetting: ProviderSetting.Antigravity): List<Model> = withContext(Dispatchers.IO) {
         val activeAccount = selectBestAccount(providerSetting, "gemini-3-flash", null)
         val tokenPair = runCatching { getValidAccessToken(activeAccount) }.getOrNull()
         if (tokenPair != null) {
@@ -216,7 +231,7 @@ class AntigravityProvider(
         providerSetting: ProviderSetting.Antigravity,
         messages: List<UIMessage>,
         params: TextGenerationParams
-    ): MessageChunk = withContext(providerIoDispatcher) {
+    ): MessageChunk = withContext(Dispatchers.IO) {
         val modelId = params.model.modelId
         val excludeEmails = mutableSetOf<String>()
         var attempts = 0

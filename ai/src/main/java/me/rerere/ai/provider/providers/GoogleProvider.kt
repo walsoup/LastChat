@@ -68,7 +68,7 @@ import kotlin.uuid.Uuid
 
 private const val TAG = "GoogleProvider"
 
-internal fun buildGoogleToolsPayload(params: TextGenerationParams): JsonArray? {
+fun buildGoogleToolsPayload(params: TextGenerationParams): JsonArray? {
     if (params.tools.isEmpty() && params.builtInTools.isEmpty()) {
         return null
     }
