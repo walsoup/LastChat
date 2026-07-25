@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -60,19 +61,76 @@ class AntigravityProvider(
     private val platformHttpClient = OkHttpPlatformHttpClient(client)
     private val json = Json { ignoreUnknownKeys = true }
 
-    private suspend fun getValidAccessToken(providerSetting: ProviderSetting.Antigravity): String {
+    /**
+     * Resolves the best available Antigravity account using scoring, cooldown state, and sticky session mapping.
+     */
+    private suspend fun selectBestAccount(
+        primarySetting: ProviderSetting.Antigravity,
+        modelId: String,
+        sessionId: String?,
+        excludeEmails: Set<String> = emptySet()
+    ): ProviderSetting.Antigravity {
+        val settings = settingsStore.settingsFlowRaw.first()
+        val allAccounts = settings.providers
+            .filterIsInstance<ProviderSetting.Antigravity>()
+            .filter { it.enabled && it.refreshToken.isNotBlank() && !excludeEmails.contains(it.email) }
+
+        if (allAccounts.isEmpty()) {
+            return primarySetting
+        }
+
+        val now = System.currentTimeMillis()
+
+        // 1. Check sticky session mapping
+        val stickyEmail = AntigravityAccountManager.getStickyAccount(sessionId)
+        if (!stickyEmail.isNullOrBlank()) {
+            val sticky = allAccounts.find { it.email == stickyEmail }
+            if (sticky != null && !AntigravityAccountManager.isCooldown(sticky.email, modelId)) {
+                return sticky
+            }
+        }
+
+        // 2. Filter accounts not on cooldown
+        var candidates = allAccounts.filter { !AntigravityAccountManager.isCooldown(it.email, modelId) }
+
+        // 3. Fallback / Rescue: Sort by earliest cooldown expiration
+        if (candidates.isEmpty()) {
+            candidates = allAccounts.sortedBy { AntigravityAccountManager.getCooldownExpiry(it.email, modelId) }
+        }
+
+        if (candidates.isEmpty()) {
+            return primarySetting
+        }
+
+        // 4. Score candidates based on health score + LRU recency
+        val best = candidates.maxByOrNull { acc ->
+            val health = AntigravityAccountManager.getHealthScore(acc.email)
+            val lastUsedTime = AntigravityAccountManager.getLastUsed(acc.email)
+            val secondsSinceUsed = (now - lastUsedTime).coerceAtLeast(0) / 1000.0
+            
+            // Priority formula matches Rust proxy weighting: (health * 2.0) + (secondsSinceUsed * 0.1)
+            (health * 2.0) + (secondsSinceUsed * 0.1)
+        }
+
+        return best ?: primarySetting
+    }
+
+    private suspend fun getValidAccessToken(providerSetting: ProviderSetting.Antigravity): Pair<String, ProviderSetting.Antigravity> {
         val now = System.currentTimeMillis()
         if (providerSetting.accessToken.isNotBlank() && now < providerSetting.tokenExpiry - 60000) {
-            return providerSetting.accessToken
+            return providerSetting.accessToken to providerSetting
         }
         if (providerSetting.refreshToken.isBlank()) {
-            error("No refresh token available. Please sign in with Google in provider settings.")
+            error("No refresh token available for ${providerSetting.email}. Please sign in with Google.")
         }
         Log.i(TAG, "Refreshing access token for ${providerSetting.email}...")
         val tokenResponse = oauthManager.refreshAccessToken(providerSetting.refreshToken)
         val newAccessToken = tokenResponse.accessToken
         val newExpiry = System.currentTimeMillis() + (tokenResponse.expiresIn * 1000)
 
+        val updated = providerSetting.copy(accessToken = newAccessToken, tokenExpiry = newExpiry)
+
+        // Persist to Datastore
         runCatching {
             settingsStore.update { raw ->
                 val updatedProviders = raw.providers.map { p ->
@@ -83,16 +141,18 @@ class AntigravityProvider(
                 raw.copy(providers = updatedProviders)
             }
         }
-        return newAccessToken
+        return newAccessToken to updated
     }
 
     override suspend fun listModels(providerSetting: ProviderSetting.Antigravity): List<Model> = withContext(providerIoDispatcher) {
-        val token = runCatching { getValidAccessToken(providerSetting) }.getOrNull()
-        if (token != null) {
-            val fingerprint = oauthManager.generateFingerprint(providerSetting.email)
+        val activeAccount = selectBestAccount(providerSetting, "gemini-3-flash", null)
+        val tokenPair = runCatching { getValidAccessToken(activeAccount) }.getOrNull()
+        if (tokenPair != null) {
+            val (token, account) = tokenPair
+            val fingerprint = oauthManager.generateFingerprint(account.email)
             val requestBody = buildJsonObject {
-                if (providerSetting.projectId.isNotEmpty()) {
-                    put("project", providerSetting.projectId)
+                if (account.projectId.isNotEmpty()) {
+                    put("project", account.projectId)
                 }
             }
 
@@ -157,51 +217,72 @@ class AntigravityProvider(
         messages: List<UIMessage>,
         params: TextGenerationParams
     ): MessageChunk = withContext(providerIoDispatcher) {
-        val token = getValidAccessToken(providerSetting)
-        val fingerprint = oauthManager.generateFingerprint(providerSetting.email)
-        val payload = buildPayload(providerSetting, messages, params)
+        val modelId = params.model.modelId
+        val excludeEmails = mutableSetOf<String>()
+        var attempts = 0
+        var lastError: Throwable? = null
 
-        val headers = mapOf(
-            "Authorization" to "Bearer $token",
-            "x-goog-api-client" to fingerprint.apiClient,
-            "x-goog-quotauser" to fingerprint.quotaUser,
-            "x-client-device-id" to fingerprint.deviceId,
-            "client-metadata" to fingerprint.clientMetadataJson,
-            "User-Agent" to "google-api-nodejs-client/9.15.1",
-            "Content-Type" to "application/json",
-        )
+        while (attempts < 3) {
+            val account = selectBestAccount(providerSetting, modelId, params.sessionId, excludeEmails)
+            attempts++
+            try {
+                val (token, activeAccount) = getValidAccessToken(account)
+                val fingerprint = oauthManager.generateFingerprint(activeAccount.email)
+                val payload = buildPayload(activeAccount, messages, params)
 
-        val response = platformHttpClient.execute(
-            PlatformHttpRequest(
-                method = "POST",
-                url = CLOUDCODE_ENDPOINT,
-                headers = headers,
-                body = json.encodeToString(payload).encodeToByteArray(),
-                mediaType = "application/json",
-                proxy = providerSetting.proxy.toPlatformProxy()
-            )
-        )
-
-        val bodyStr = response.body.decodeToString()
-        if (response.statusCode !in 200..299) {
-            throw Exception("Antigravity request failed #${response.statusCode}: $bodyStr")
-        }
-
-        val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
-        val candidates = bodyJson["candidates"]?.jsonArray ?: JsonArray(emptyList())
-
-        MessageChunk(
-            id = Uuid.random().toString(),
-            model = params.model.modelId,
-            choices = candidates.map { candidate ->
-                UIMessageChoice(
-                    message = parseMessage(candidate.jsonObject),
-                    index = 0,
-                    finishReason = candidate.jsonObject["finishReason"]?.jsonPrimitive?.contentOrNull,
-                    delta = null
+                val headers = mapOf(
+                    "Authorization" to "Bearer $token",
+                    "x-goog-api-client" to fingerprint.apiClient,
+                    "x-goog-quotauser" to fingerprint.quotaUser,
+                    "x-client-device-id" to fingerprint.deviceId,
+                    "client-metadata" to fingerprint.clientMetadataJson,
+                    "User-Agent" to "google-api-nodejs-client/9.15.1",
+                    "Content-Type" to "application/json",
                 )
+
+                val response = platformHttpClient.execute(
+                    PlatformHttpRequest(
+                        method = "POST",
+                        url = CLOUDCODE_ENDPOINT,
+                        headers = headers,
+                        body = json.encodeToString(payload).encodeToByteArray(),
+                        mediaType = "application/json",
+                        proxy = activeAccount.proxy.toPlatformProxy()
+                    )
+                )
+
+                val bodyStr = response.body.decodeToString()
+                if (response.statusCode !in 200..299) {
+                    throw Exception("Antigravity request failed #${response.statusCode}: $bodyStr")
+                }
+
+                val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
+                val candidates = bodyJson["candidates"]?.jsonArray ?: JsonArray(emptyList())
+
+                AntigravityAccountManager.onSuccess(activeAccount.email, modelId, params.sessionId)
+
+                return@withContext MessageChunk(
+                    id = Uuid.random().toString(),
+                    model = modelId,
+                    choices = candidates.map { candidate ->
+                        UIMessageChoice(
+                            message = parseMessage(candidate.jsonObject),
+                            index = 0,
+                            finishReason = candidate.jsonObject["finishReason"]?.jsonPrimitive?.contentOrNull,
+                            delta = null
+                        )
+                    }
+                )
+            } catch (e: Throwable) {
+                lastError = e
+                Log.e(TAG, "Request failed for account ${account.email}, retrying... error: ${e.message}")
+                AntigravityAccountManager.onFailure(account.email, modelId, params.sessionId, (e as? Exception)?.message?.let {
+                    if (it.contains("429")) 429 else if (it.contains("403")) 403 else null
+                })
+                excludeEmails.add(account.email)
             }
-        )
+        }
+        throw lastError ?: Exception("Failed to execute generateText after 3 attempts")
     }
 
     override suspend fun streamText(
@@ -209,49 +290,72 @@ class AntigravityProvider(
         messages: List<UIMessage>,
         params: TextGenerationParams
     ): Flow<MessageChunk> = callbackFlow {
-        val token = getValidAccessToken(providerSetting)
-        val fingerprint = oauthManager.generateFingerprint(providerSetting.email)
-        val payload = buildPayload(providerSetting, messages, params)
+        val modelId = params.model.modelId
+        val excludeEmails = mutableSetOf<String>()
+        var attempts = 0
+        var streamStarted = false
 
-        val headers = mapOf(
-            "Authorization" to "Bearer $token",
-            "x-goog-api-client" to fingerprint.apiClient,
-            "x-goog-quotauser" to fingerprint.quotaUser,
-            "x-client-device-id" to fingerprint.deviceId,
-            "client-metadata" to fingerprint.clientMetadataJson,
-            "User-Agent" to "google-api-nodejs-client/9.15.1",
-            "Content-Type" to "application/json",
-        )
+        while (attempts < 3 && !streamStarted) {
+            val account = selectBestAccount(providerSetting, modelId, params.sessionId, excludeEmails)
+            attempts++
+            try {
+                val (token, activeAccount) = getValidAccessToken(account)
+                val fingerprint = oauthManager.generateFingerprint(activeAccount.email)
+                val payload = buildPayload(activeAccount, messages, params)
 
-        val encodedRequestBody = json.encodeToString(payload)
-        val request = PlatformHttpRequest(
-            method = "POST",
-            url = CLOUDCODE_ENDPOINT,
-            headers = headers,
-            body = encodedRequestBody.encodeToByteArray(),
-            mediaType = "application/json",
-            proxy = providerSetting.proxy.toPlatformProxy()
-        )
+                val headers = mapOf(
+                    "Authorization" to "Bearer $token",
+                    "x-goog-api-client" to fingerprint.apiClient,
+                    "x-goog-quotauser" to fingerprint.quotaUser,
+                    "x-client-device-id" to fingerprint.deviceId,
+                    "client-metadata" to fingerprint.clientMetadataJson,
+                    "User-Agent" to "google-api-nodejs-client/9.15.1",
+                    "Content-Type" to "application/json",
+                )
 
-        val job = launch {
-            platformHttpClient.streamEvents(request).collect { event ->
-                when (event) {
-                    is PlatformServerEvent.Open -> Unit
-                    PlatformServerEvent.Closed -> close()
-                    is PlatformServerEvent.Failure -> close(parseStreamFailure(event))
-                    is PlatformServerEvent.Event -> {
-                        runCatching {
-                            parseStreamChunk(event.data, params.model.modelId)?.let { trySend(it) }
-                        }.onFailure { error ->
-                            error.printStackTrace()
-                            close(error)
+                val encodedRequestBody = json.encodeToString(payload)
+                val request = PlatformHttpRequest(
+                    method = "POST",
+                    url = CLOUDCODE_ENDPOINT,
+                    headers = headers,
+                    body = encodedRequestBody.encodeToByteArray(),
+                    mediaType = "application/json",
+                    proxy = activeAccount.proxy.toPlatformProxy()
+                )
+
+                streamStarted = true
+                val job = launch {
+                    platformHttpClient.streamEvents(request).collect { event ->
+                        when (event) {
+                            is PlatformServerEvent.Open -> {
+                                AntigravityAccountManager.onSuccess(activeAccount.email, modelId, params.sessionId)
+                            }
+                            PlatformServerEvent.Closed -> close()
+                            is PlatformServerEvent.Failure -> {
+                                AntigravityAccountManager.onFailure(activeAccount.email, modelId, params.sessionId, event.statusCode)
+                                close(parseStreamFailure(event))
+                            }
+                            is PlatformServerEvent.Event -> {
+                                runCatching {
+                                    parseStreamChunk(event.data, modelId)?.let { trySend(it) }
+                                }.onFailure { error ->
+                                    error.printStackTrace()
+                                    close(error)
+                                }
+                            }
                         }
                     }
                 }
+
+                awaitClose { job.cancel() }
+                return@callbackFlow
+            } catch (e: Throwable) {
+                Log.e(TAG, "Stream launch failed for account ${account.email}, retrying... error: ${e.message}")
+                AntigravityAccountManager.onFailure(account.email, modelId, params.sessionId, null)
+                excludeEmails.add(account.email)
             }
         }
-
-        awaitClose { job.cancel() }
+        close(Exception("Failed to initiate Antigravity stream after 3 attempts"))
     }
 
     private fun buildPayload(

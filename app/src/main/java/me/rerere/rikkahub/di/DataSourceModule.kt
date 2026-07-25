@@ -74,7 +74,6 @@ import me.rerere.rikkahub.data.codex.CodexCredentialStore
 import me.rerere.rikkahub.data.codex.CodexOAuthManager
 import me.rerere.rikkahub.data.codex.CodexProvider
 import me.rerere.rikkahub.data.antigravity.AntigravityOAuthManager
-import me.rerere.rikkahub.data.antigravity.AntigravityProxyManager
 
 const val SEARCH_PLATFORM_HTTP_CLIENT = "searchPlatformHttpClient"
 private const val MCP_OKHTTP_CLIENT = "mcpOkHttpClient"
@@ -326,12 +325,7 @@ val dataSourceModule = module {
         )
     }
 
-    single {
-        AntigravityProxyManager(
-            context = get(),
-            settingsStore = get(),
-        )
-    }
+
 
     single<PlatformHttpClient>(named(MCP_PLATFORM_HTTP_CLIENT)) {
         OkHttpPlatformHttpClient(get<OkHttpClient>(named(MCP_OKHTTP_CLIENT)))
