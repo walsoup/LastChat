@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - LastChat_dev
+      - agent-port
   workflow_dispatch:
 
 jobs:
