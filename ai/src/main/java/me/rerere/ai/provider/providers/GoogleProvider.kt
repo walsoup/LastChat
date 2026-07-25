@@ -137,7 +137,10 @@ class GoogleProvider(
         val cleanPath = path.trimStart('/')
         return if (!providerSetting.vertexAI) {
             val key = keyRoulette.next(providerSetting.apiKey)
-            val cleanBaseUrl = providerSetting.baseUrl.trimEnd('/')
+            var cleanBaseUrl = providerSetting.baseUrl.trimEnd('/')
+            if (!cleanBaseUrl.contains("/v1") && !cleanBaseUrl.contains("/v2")) {
+                cleanBaseUrl = "$cleanBaseUrl/v1beta"
+            }
             "$cleanBaseUrl/$cleanPath".appendQueryParameter("key", key)
         } else {
             "https://aiplatform.googleapis.com/v1/projects/${providerSetting.projectId}/locations/${providerSetting.location}/$cleanPath"
@@ -926,10 +929,11 @@ class GoogleProvider(
 }
 
 private fun String.appendQueryParameter(name: String, value: String): String {
-    val separator = if (contains("?")) "&" else "?"
+    val cleanUrl = this.trimEnd('?', '&')
+    val separator = if (cleanUrl.contains("?")) "&" else "?"
     val encodedName = name.urlEncode(spaceAsPlus = true)
     val encodedValue = value.urlEncode(spaceAsPlus = true)
-    return "$this$separator$encodedName=$encodedValue"
+    return "$cleanUrl$separator$encodedName=$encodedValue"
 }
 
 private fun List<CustomHeader>.toHeaderMap(): Map<String, String> {

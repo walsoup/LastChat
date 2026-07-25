@@ -78,7 +78,7 @@ val SPECIAL_PROVIDER_PRESETS = listOf(
         name = "Antigravity",
         description = "Sign in with your Google account to use Gemini via the internal Google Cloud Code Assist API — no API key required",
         type = ProviderSetting.Antigravity::class,
-        baseUrl = "https://daily-cloudcode-pa.googleapis.com",
+        baseUrl = "http://127.0.0.1:3000/v1",
         customIconUri = "icons/google.svg".toCatalogIconUrl(),
     ),
     ProviderPreset(

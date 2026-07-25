@@ -32,6 +32,14 @@ class AntigravityProvider(
 
     private fun ProviderSetting.Antigravity.toOpenAI(): ProviderSetting.OpenAI {
         val port = antigravityProxyManager.activePort
+        val rawUrl = this.baseUrl.trim()
+        val effectiveBaseUrl = if (rawUrl.startsWith("http://127.0.0.1") || rawUrl.startsWith("http://localhost")) {
+            rawUrl.trimEnd('/')
+        } else if (rawUrl.contains("cloudcode-pa.googleapis.com") || rawUrl.contains("?alt=sse") || rawUrl.isBlank()) {
+            "http://127.0.0.1:$port/v1"
+        } else {
+            rawUrl.trimEnd('/')
+        }
         return ProviderSetting.OpenAI(
             id = this.id,
             enabled = this.enabled,
@@ -41,8 +49,8 @@ class AntigravityProvider(
             balanceOption = this.balanceOption,
             tags = this.tags,
             customIconUri = this.customIconUri,
-            apiKey = "any",
-            baseUrl = "http://127.0.0.1:$port/v1",
+            apiKey = this.apiKey.ifBlank { "any" },
+            baseUrl = effectiveBaseUrl,
             chatCompletionsPath = "/chat/completions",
             useResponseApi = false
         )
